@@ -1,0 +1,114 @@
+networks:
+  ztam:
+    driver: bridge
+
+services:
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: keycloak
+      POSTGRES_USER: keycloak
+      POSTGRES_PASSWORD: ${PG_PASS}
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    networks: [ztam]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U keycloak"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.3
+    command: start-dev
+    volumes:
+      - ./keycloak-db-spi/target/keycloak-db-spi.jar:/opt/keycloak/providers/keycloak-db-spi.jar
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: ${KC_ADMIN_PASS}
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: ${PG_PASS}
+    ports:
+      - "8080:8080"
+    networks: [ztam]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  opa:
+    image: openpolicyagent/opa:latest
+    command: run --server --addr 0.0.0.0:8181 --watch /policies
+    volumes:
+      - ./policies:/policies:ro
+    ports:
+      - "8181:8181"
+    networks: [ztam]
+
+  auth-middleware:
+    build: ./services/auth-middleware
+    environment:
+      KEYCLOAK_URL: http://keycloak:8080
+      KC_REALM: ${KC_REALM}
+      KC_CLIENT_ID: ${KC_CLIENT_ID:-test-app}
+      KC_CLIENT_SECRET: ${KC_CLIENT_SECRET:-test-app-secret-2024}
+      OPA_URL: http://opa:8181
+      TESTAPP_JWT_SECRET: ${TESTAPP_JWT_SECRET:-super_secret_jwt_key_for_ztam_demo_2024}
+    ports:
+      - "8001:8001"
+    networks: [ztam]
+    depends_on:
+      - keycloak
+      - opa
+
+  envoy:
+    image: envoyproxy/envoy:v1.28-latest
+    volumes:
+      - ./envoy/envoy.yaml:/etc/envoy/envoy.yaml:ro
+    ports:
+      - "80:8080"
+    networks: [ztam]
+    depends_on:
+      - auth-middleware
+
+  # ── TestApp (Task Manager demo) ──────────────────────────────────────────────
+  testapp-db:
+    image: mysql:8
+    environment:
+      MYSQL_ROOT_PASSWORD: taskroot
+      MYSQL_DATABASE: taskapp
+      MYSQL_USER: taskuser
+      MYSQL_PASSWORD: taskpass
+    volumes:
+      - ./testapp/schema.sql:/docker-entrypoint-initdb.d/schema.sql
+      - testapp-db-data:/var/lib/mysql
+    networks: [ztam]
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "taskuser", "--password=taskpass"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+
+  testapp:
+    build: ./testapp
+    ports:
+      - "3001:3000"
+    environment:
+      DB_HOST: testapp-db
+      DB_PORT: 3306
+      DB_USER: taskuser
+      DB_PASSWORD: taskpass
+      DB_NAME: taskapp
+      JWT_SECRET: super_secret_jwt_key_for_ztam_demo_2024
+      JWT_EXPIRES_IN: 8h
+      PORT: 3000
+    networks: [ztam]
+    depends_on:
+      testapp-db:
+        condition: service_healthy
+
+volumes:
+  pg-data:
+  testapp-db-data:

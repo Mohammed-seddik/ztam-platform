@@ -1,0 +1,14 @@
+{
+  "roles": {
+    "editor": {
+      "allowed_paths": ["/api/"],
+      "denied_paths": ["/admin/", "/admin"],
+      "allowed_methods": ["GET", "POST"]
+    },
+    "viewer": {
+      "allowed_paths": ["/api/"],
+      "denied_paths": ["/admin/", "/admin"],
+      "allowed_methods": ["GET"]
+    }
+  }
+}

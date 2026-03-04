@@ -1,0 +1,3 @@
+com/ztam/spi/MySqlUserAdapter.class
+com/ztam/spi/MySqlUserStorageProvider.class
+com/ztam/spi/MySqlUserStorageProviderFactory.class
