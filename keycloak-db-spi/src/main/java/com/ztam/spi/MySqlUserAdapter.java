@@ -1,14 +1,15 @@
 package com.ztam.spi;
 
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.stream.Stream;
+
 import org.keycloak.component.ComponentModel;
 import org.keycloak.models.KeycloakSession;
 import org.keycloak.models.RealmModel;
 import org.keycloak.storage.StorageId;
 import org.keycloak.storage.adapter.AbstractUserAdapterFederatedStorage;
-
-import java.util.List;
-import java.util.Map;
-import java.util.stream.Stream;
 
 /**
  * Wraps a MySQL user row into a Keycloak UserModel.
@@ -78,7 +79,8 @@ public class MySqlUserAdapter extends AbstractUserAdapterFederatedStorage {
     // ── Attributes — exposes role as a custom JWT claim ───────────────────────
     @Override
     public Map<String, List<String>> getAttributes() {
-        Map<String, List<String>> attrs = super.getAttributes();
+        // Wrap in a new HashMap to avoid mutating the federated storage backing map
+        Map<String, List<String>> attrs = new HashMap<>(super.getAttributes());
         attrs.put("role",        List.of(role));
         attrs.put("db_user_id", List.of(String.valueOf(dbId)));
         return attrs;

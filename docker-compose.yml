@@ -1,11 +1,7 @@
-networks:
-  ztam:
-    driver: bridge
-
 services:
 
   postgres:
-    image: postgres:16-alpine
+    image: postgres:16
     environment:
       POSTGRES_DB: keycloak
       POSTGRES_USER: keycloak
@@ -13,6 +9,7 @@ services:
     volumes:
       - pg-data:/var/lib/postgresql/data
     networks: [ztam]
+    restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U keycloak"]
       interval: 5s
@@ -20,7 +17,7 @@ services:
       retries: 10
 
   keycloak:
-    image: quay.io/keycloak/keycloak:26.3
+    image: quay.io/keycloak/keycloak:26.3.0
     command: start-dev
     volumes:
       - ./keycloak-db-spi/target/keycloak-db-spi.jar:/opt/keycloak/providers/keycloak-db-spi.jar
@@ -31,21 +28,37 @@ services:
       KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
       KC_DB_USERNAME: keycloak
       KC_DB_PASSWORD: ${PG_PASS}
+      KC_HOSTNAME: localhost
+      KC_HOSTNAME_STRICT: "false"
+      KC_HOSTNAME_STRICT_HTTPS: "false"
     ports:
       - "8080:8080"
     networks: [ztam]
+    restart: unless-stopped
     depends_on:
       postgres:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/8080' 2>/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 60s
 
   opa:
-    image: openpolicyagent/opa:latest
-    command: run --server --addr 0.0.0.0:8181 --watch /policies
+    image: openpolicyagent/opa:0.64.1-debug
+    command: run --server --addr 0.0.0.0:8181 --watch /policies --ignore '*_test.rego'
     volumes:
       - ./policies:/policies:ro
     ports:
       - "8181:8181"
     networks: [ztam]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8181/health || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
 
   auth-middleware:
     build: ./services/auth-middleware
@@ -59,32 +72,37 @@ services:
     ports:
       - "8001:8001"
     networks: [ztam]
+    restart: unless-stopped
     depends_on:
-      - keycloak
-      - opa
+      keycloak:
+        condition: service_healthy
+      opa:
+        condition: service_healthy
 
   envoy:
-    image: envoyproxy/envoy:v1.28-latest
+    image: envoyproxy/envoy:v1.28.7
     volumes:
       - ./envoy/envoy.yaml:/etc/envoy/envoy.yaml:ro
     ports:
       - "80:8080"
     networks: [ztam]
+    restart: unless-stopped
     depends_on:
-      - auth-middleware
+      auth-middleware:
+        condition: service_healthy
 
-  # ── TestApp (Task Manager demo) ──────────────────────────────────────────────
   testapp-db:
     image: mysql:8
     environment:
-      MYSQL_ROOT_PASSWORD: taskroot
-      MYSQL_DATABASE: taskapp
-      MYSQL_USER: taskuser
-      MYSQL_PASSWORD: taskpass
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-taskroot}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-taskapp}
+      MYSQL_USER: ${MYSQL_USER:-taskuser}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-taskpass}
     volumes:
       - ./testapp/schema.sql:/docker-entrypoint-initdb.d/schema.sql
       - testapp-db-data:/var/lib/mysql
     networks: [ztam]
+    restart: unless-stopped
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "taskuser", "--password=taskpass"]
       interval: 10s
@@ -98,16 +116,21 @@ services:
     environment:
       DB_HOST: testapp-db
       DB_PORT: 3306
-      DB_USER: taskuser
-      DB_PASSWORD: taskpass
-      DB_NAME: taskapp
-      JWT_SECRET: super_secret_jwt_key_for_ztam_demo_2024
+      DB_USER: ${MYSQL_USER:-taskuser}
+      DB_PASSWORD: ${MYSQL_PASSWORD:-taskpass}
+      DB_NAME: ${MYSQL_DATABASE:-taskapp}
+      JWT_SECRET: ${TESTAPP_JWT_SECRET:-super_secret_jwt_key_for_ztam_demo_2024}
       JWT_EXPIRES_IN: 8h
       PORT: 3000
     networks: [ztam]
+    restart: unless-stopped
     depends_on:
       testapp-db:
         condition: service_healthy
+
+networks:
+  ztam:
+    driver: bridge
 
 volumes:
   pg-data:

@@ -5,7 +5,7 @@
   <artifactId>keycloak-db-spi</artifactId>
   <name>ZTAM Keycloak MySQL DB SPI</name>
   <version>1.0.0</version>
-  <description>Keycloak 24 User Storage SPI — reads from client's MySQL database</description>
+  <description>Keycloak 26 User Storage SPI — reads from client's MySQL database (bcrypt, read-only)</description>
   <build>
     <plugins>
       <plugin>
@@ -19,6 +19,9 @@
             </goals>
             <configuration>
               <finalName>keycloak-db-spi</finalName>
+              <transformers>
+                <transformer />
+              </transformers>
               <filters>
                 <filter>
                   <artifact>*:*</artifact>

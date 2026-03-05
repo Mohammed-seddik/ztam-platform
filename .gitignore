@@ -1,0 +1,17 @@
+# environment secrets
+.env
+
+# Java build output
+*.jar
+target/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp

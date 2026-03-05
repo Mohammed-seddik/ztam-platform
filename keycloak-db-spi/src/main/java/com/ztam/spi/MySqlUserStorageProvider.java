@@ -15,12 +15,9 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * The core SPI implementation.
- * Implements:
- *  - UserLookupProvider   → getUserByUsername / getUserByEmail / getUserById
- *  - CredentialInputValidator → validates the supplied password against MySQL
- *
- * This class NEVER issues INSERT/UPDATE/DELETE — SELECT only.
+ * ZTAM Keycloak User Storage SPI — Keycloak 26.
+ * SELECT-only against TestApp's MySQL database.
+ * Implements UserLookupProvider + CredentialInputValidator.
  */
 public class MySqlUserStorageProvider
         implements UserStorageProvider, UserLookupProvider, CredentialInputValidator {
@@ -31,7 +28,6 @@ public class MySqlUserStorageProvider
     private final KeycloakSession session;
     private final ComponentModel  model;
 
-    // Resolved config values
     private final String jdbcUrl;
     private final String dbUser;
     private final String dbPass;
@@ -39,7 +35,6 @@ public class MySqlUserStorageProvider
     private final String usernameCol;
     private final String passwordCol;
     private final String roleCol;
-    private final String hashAlgo;
 
     public MySqlUserStorageProvider(KeycloakSession session, ComponentModel model) {
         this.session = session;
@@ -57,7 +52,6 @@ public class MySqlUserStorageProvider
         this.usernameCol = cfg(MySqlUserStorageProviderFactory.CFG_COL_USER);
         this.passwordCol = cfg(MySqlUserStorageProviderFactory.CFG_COL_PASS);
         this.roleCol     = cfg(MySqlUserStorageProviderFactory.CFG_COL_ROLE);
-        this.hashAlgo    = cfg(MySqlUserStorageProviderFactory.CFG_HASH);
     }
 
     private String cfg(String key) {
@@ -65,31 +59,29 @@ public class MySqlUserStorageProvider
         return value != null ? value : "";
     }
 
-    // ─── Lifecycle ──────────────────────────────────────────────────────────
     @Override
-    public void close() {
-        // Connections are opened per-request; nothing to close here.
-    }
+    public void close() {}
 
     // ─── User Lookup ────────────────────────────────────────────────────────
     @Override
     public UserModel getUserByUsername(RealmModel realm, String username) {
-        LOG.log(java.util.logging.Level.INFO, "[ZTAM SPI] getUserByUsername: {0}", username);
-        return findUserByLoginId(realm, username);
+        LOG.log(Level.INFO, "[ZTAM SPI] getUserByUsername: {0}", username);
+        return findUser(realm, username);
     }
 
     @Override
     public UserModel getUserByEmail(RealmModel realm, String email) {
-        LOG.log(java.util.logging.Level.INFO, "[ZTAM SPI] getUserByEmail: {0}", email);
-        return findUserByLoginId(realm, email);
+        LOG.log(Level.INFO, "[ZTAM SPI] getUserByEmail: {0}", email);
+        return findUser(realm, email);
     }
 
     @Override
     public UserModel getUserById(RealmModel realm, String id) {
-        // id format produced by MySqlUserAdapter.getId() → "f:<component-id>:<loginId>"
+        // id format: "f:<component-id>:<loginId>"
+        if (id == null || !id.startsWith("f:")) return null;
         String[] parts = id.split(":", 3);
         if (parts.length < 3) return null;
-        return findUserByLoginId(realm, parts[2]);
+        return findUser(realm, parts[2]);
     }
 
     // ─── Credential Validation ───────────────────────────────────────────────
@@ -110,33 +102,31 @@ public class MySqlUserStorageProvider
         String supplied = input.getChallengeResponse();
         String loginId  = user.getUsername();
 
-        LOG.log(java.util.logging.Level.INFO, "[ZTAM SPI] isValid called for: {0}", loginId);
+        LOG.log(Level.INFO, "[ZTAM SPI] isValid called for: {0}", loginId);
 
         String storedHash = fetchPasswordHash(loginId);
         if (storedHash == null) {
-            LOG.log(java.util.logging.Level.WARNING, "[ZTAM SPI] No password hash found for: {0}", loginId);
+            LOG.log(Level.WARNING, "[ZTAM SPI] No password hash found for: {0}", loginId);
             return false;
         }
 
-        boolean valid = verifyPassword(supplied, storedHash);
-        LOG.log(java.util.logging.Level.INFO, "[ZTAM SPI] Password check for {0}: {1}", new Object[]{loginId, valid ? "OK" : "FAIL"});
+        boolean valid = verifyBcrypt(supplied, storedHash);
+        LOG.log(Level.INFO, "[ZTAM SPI] Password check for {0}: {1}",
+                new Object[]{loginId, valid ? "OK" : "FAIL"});
         return valid;
     }
 
     // ─── Internal helpers ────────────────────────────────────────────────────
 
     /**
-     * Look up a user row by the configured username/email column.
-     * Returns null if not found or on any DB error.
+     * Single SQL query: fetches id, usernameCol, and roleCol in one round trip.
      */
-    private UserModel findUserByLoginId(RealmModel realm, String loginId) {
-        // Sanitise: loginId must not contain SQL metacharacters (we still use PreparedStatement)
+    private UserModel findUser(RealmModel realm, String loginId) {
         if (loginId == null || loginId.isBlank()) return null;
 
-        String sql = "SELECT id, " + escape(usernameCol) + ", "
-                   + escape(roleCol)
-                   + " FROM " + escape(tableName)
-                   + " WHERE " + escape(usernameCol) + " = ? LIMIT 1";
+        String sql = "SELECT `id`, " + esc(usernameCol) + ", " + esc(roleCol)
+                   + " FROM " + esc(tableName)
+                   + " WHERE " + esc(usernameCol) + " = ? LIMIT 1";
 
         try (Connection conn = openConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
@@ -145,12 +135,13 @@ public class MySqlUserStorageProvider
             try (ResultSet rs = ps.executeQuery()) {
                 if (rs.next()) {
                     int    dbId    = rs.getInt("id");
-                    String username = rs.getString(usernameCol);
-                    String rawRole  = rs.getString(roleCol);
-                    String role     = normalizeRole(rawRole);
+                    String uname   = rs.getString(usernameCol);
+                    String rawRole = rs.getString(roleCol);
+                    String role    = normalizeRole(rawRole);
 
-                    LOG.log(java.util.logging.Level.INFO, "[ZTAM SPI] Found user: {0} role: {1}", new Object[]{username, role});
-                    return new MySqlUserAdapter(session, realm, model, username, role, dbId);
+                    LOG.log(Level.INFO, "[ZTAM SPI] Found user: {0} role: {1}",
+                            new Object[]{uname, role});
+                    return new MySqlUserAdapter(session, realm, model, uname, role, dbId);
                 }
             }
         } catch (SQLException e) {
@@ -160,12 +151,12 @@ public class MySqlUserStorageProvider
     }
 
     /**
-     * Fetch only the password hash for a given login identifier.
+     * Fetch only the bcrypt hash for credential validation.
      */
     private String fetchPasswordHash(String loginId) {
-        String sql = "SELECT " + escape(passwordCol)
-                   + " FROM " + escape(tableName)
-                   + " WHERE " + escape(usernameCol) + " = ? LIMIT 1";
+        String sql = "SELECT " + esc(passwordCol)
+                   + " FROM " + esc(tableName)
+                   + " WHERE " + esc(usernameCol) + " = ? LIMIT 1";
 
         try (Connection conn = openConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
@@ -185,64 +176,38 @@ public class MySqlUserStorageProvider
     }
 
     /**
-     * Verify a plaintext password against a stored hash using the configured algorithm.
+     * bcrypt-only password verification.
+     * Normalizes $2b$ (Node.js/bcryptjs) -> $2a$ (jBCrypt) — mathematically identical.
+     * SHA-256 and MD5 are NOT supported — they are not password hashing functions.
      */
-    private boolean verifyPassword(String plain, String stored) {
+    private boolean verifyBcrypt(String plain, String stored) {
         try {
-            return switch (hashAlgo.toLowerCase()) {
-                // Node.js bcrypt uses $2b$ prefix; jbcrypt only understands $2a$.
-                // They are mathematically identical — safe to normalize.
-                case "bcrypt" -> org.mindrot.jbcrypt.BCrypt.checkpw(plain,
-                        stored.startsWith("$2b$") ? "$2a$" + stored.substring(4) : stored);
-                case "sha256" -> hashSha256(plain).equalsIgnoreCase(stored);
-                case "md5"    -> hashMd5(plain).equalsIgnoreCase(stored);
-                default -> {
-                    LOG.log(java.util.logging.Level.WARNING, "[ZTAM SPI] Unknown hash algorithm: {0}", hashAlgo);
-                    yield false;
-                }
-            };
+            String hash = stored.startsWith("$2b$")
+                    ? "$2a$" + stored.substring(4)
+                    : stored;
+            return org.mindrot.jbcrypt.BCrypt.checkpw(plain, hash);
         } catch (Exception e) {
-            LOG.log(Level.SEVERE, "[ZTAM SPI] Password verification error: " + e.getMessage(), e);
+            LOG.log(Level.SEVERE, "[ZTAM SPI] bcrypt verification error: " + e.getMessage(), e);
             return false;
         }
     }
 
-    private String hashSha256(String input) throws Exception {
-        java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");
-        byte[] digest = md.digest(input.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-        return bytesToHex(digest);
-    }
-
-    private String hashMd5(String input) throws Exception {
-        java.security.MessageDigest md = java.security.MessageDigest.getInstance("MD5");
-        byte[] digest = md.digest(input.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-        return bytesToHex(digest);
-    }
-
-    private static String bytesToHex(byte[] bytes) {
-        StringBuilder sb = new StringBuilder(bytes.length * 2);
-        for (byte b : bytes) sb.append(String.format("%02x", b));
-        return sb.toString();
-    }
-
     /**
-     * Normalize raw DB role values to admin | editor | viewer.
+     * Normalize DB role values to the canonical ZTAM role set.
+     * "user" stays "user" — it is a valid ZTAM role defined in permissions.json.
      */
     static String normalizeRole(String raw) {
         if (raw == null) return "viewer";
         return switch (raw.toLowerCase().trim()) {
             case "admin", "superuser", "manager", "super_admin", "administrator" -> "admin";
-            case "editor", "user", "member", "contributor"                       -> "editor";
+            case "editor"                                                         -> "editor";
+            case "user", "member", "contributor"                                 -> "user";
             default                                                               -> "viewer";
         };
     }
 
-    /**
-     * Escape a column/table identifier by wrapping in backticks
-     * and stripping any pre-existing backticks — simple protection
-     * against accidental injection via config values.
-     */
-    private static String escape(String identifier) {
-        return "`" + identifier.replace("`", "") + "`";
+    /** Wrap identifier in backticks to prevent SQL identifier injection via config. */
+    private static String esc(String id) {
+        return "`" + id.replace("`", "") + "`";
     }
 }

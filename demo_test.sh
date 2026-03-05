@@ -1,19 +1,23 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
-KC_BASE="http://localhost:8080"
-KC_REALM="test-tenant"
-KC_CLIENT="test-app"
-KC_SECRET="test-app-secret-2024"
+KC_BASE="${KEYCLOAK_URL:-http://localhost:8080}"
+KC_REALM="${KC_REALM:-test-tenant}"
+KC_CLIENT="${KC_CLIENT_ID:-test-app}"
+KC_SECRET="${KC_CLIENT_SECRET:-test-app-secret-2024}"
+ADMIN_PASS="${KC_ADMIN_PASS:-admin_secret_456}"
 
 echo "============================================================"
 echo " ZTAM FULL FLOW DEMO"
 echo "============================================================"
 
 # Get fresh admin token
-ADMIN_TOKEN=$(curl -s -X POST "$KC_BASE/realms/master/protocol/openid-connect/token" \
-  -d "client_id=admin-cli&grant_type=password&username=admin&password=admin_secret_456" \
-  | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+ADMIN_TOKEN=$(curl -sf -X POST "$KC_BASE/realms/master/protocol/openid-connect/token" \
+  -d "client_id=admin-cli&grant_type=password&username=admin&password=${ADMIN_PASS}" \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])") || {
+    echo "ERROR: Failed to get admin token. Is Keycloak running at $KC_BASE?"
+    exit 1
+  }
 
 echo ""
 echo "--- testapp MySQL users (your app's DB) ---"
@@ -40,15 +44,16 @@ else:
 echo ""
 echo "--- LOGIN alice via Keycloak (SPI reads from testapp-db) ---"
 RESP=$(curl -s -X POST "$KC_BASE/realms/$KC_REALM/protocol/openid-connect/token" \
-  -d "grant_type=password&client_id=$KC_CLIENT&client_secret=$KC_SECRET&username=alice&password=Password123")
+  -d "grant_type=password&client_id=$KC_CLIENT&client_secret=$KC_SECRET&username=alice&password=secret123")
 
 echo "$RESP" | python3 -c "
 import sys,json,base64
 d=json.load(sys.stdin)
 if 'access_token' in d:
     tok=d['access_token']
-    pad=lambda s:s+'='*(4-len(s)%4)
-    payload=json.loads(base64.b64decode(pad(tok.split('.')[1])))
+    raw=tok.split('.')[1]
+    padding=(4-len(raw)%4)%4
+    payload=json.loads(base64.urlsafe_b64decode(raw+'='*padding))
     print('  Status:   LOGIN SUCCESS')
     print('  Username:', payload.get('preferred_username'))
     print('  Issuer:  ', payload.get('iss'))

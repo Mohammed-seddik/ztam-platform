@@ -21,14 +21,11 @@ static_resources:
                       "@type": type.googleapis.com/envoy.extensions.filters.http.ext_authz.v3.ExtAuthz
                       failure_mode_allow: false
                       transport_api_version: V3
-                      with_request_body:
-                        max_request_bytes: 8192
-                        allow_partial_message: true
                       http_service:
                         server_uri:
                           uri: http://auth-middleware:8001
                           cluster: auth_middleware_cluster
-                          timeout: 0.5s
+                          timeout: 5s
                         path_prefix: ""
                         authorization_request:
                           allowed_headers:
@@ -73,7 +70,7 @@ static_resources:
                               "@type": type.googleapis.com/envoy.extensions.filters.http.ext_authz.v3.ExtAuthzPerRoute
                               disabled: true
                         - match:
-                            path: "/dashboard.html"
+                            prefix: "/dashboard.html"
                           route:
                             cluster: backend_cluster
                             timeout: 5s
@@ -82,7 +79,7 @@ static_resources:
                               "@type": type.googleapis.com/envoy.extensions.filters.http.ext_authz.v3.ExtAuthzPerRoute
                               disabled: true
                         - match:
-                            path: "/register.html"
+                            prefix: "/register.html"
                           route:
                             cluster: backend_cluster
                             timeout: 5s
@@ -121,7 +118,7 @@ static_resources:
 
   clusters:
     - name: auth_middleware_cluster
-      connect_timeout: 0.5s
+      connect_timeout: 2s
       type: LOGICAL_DNS
       dns_lookup_family: V4_ONLY
       load_assignment:

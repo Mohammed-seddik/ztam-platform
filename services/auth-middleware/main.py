@@ -1,8 +1,10 @@
 """
-ZTAM Auth Middleware
-Envoy ext_authz HTTP service — validates JWT via Keycloak JWKS, then calls OPA.
+ZTAM Auth Middleware — Keycloak 26 + Envoy ext_authz + OPA
+Real JWT validation (RS256 via JWKS), real OPA call, real token translation.
 """
 
+import asyncio
+import json
 import os
 import time
 import logging
@@ -23,39 +25,54 @@ KC_REALM: str = os.getenv("KC_REALM", "test-tenant")
 KC_CLIENT_ID: str = os.getenv("KC_CLIENT_ID", "test-app")
 KC_CLIENT_SECRET: str = os.getenv("KC_CLIENT_SECRET", "")
 OPA_URL: str = os.getenv("OPA_URL", "http://opa:8181")
-# TestApp's JWT_SECRET — used to mint a downstream HS256 token that TestApp accepts
 TESTAPP_JWT_SECRET: Optional[str] = os.getenv("TESTAPP_JWT_SECRET")
 
 JWKS_URI: str = f"{KEYCLOAK_URL}/realms/{KC_REALM}/protocol/openid-connect/certs"
 KC_TOKEN_URI: str = f"{KEYCLOAK_URL}/realms/{KC_REALM}/protocol/openid-connect/token"
+EXPECTED_ISSUER: str = f"{KEYCLOAK_URL}/realms/{KC_REALM}"
 
-# ─── JWKS in-memory cache ────────────────────────────────────────────────────
+# ─── JWKS in-memory cache with asyncio lock (prevents thundering herd) ───────
 _jwks_cache: dict = {}
 _jwks_fetched_at: float = 0.0
+_jwks_lock = asyncio.Lock()
 JWKS_TTL: int = 300  # seconds
+
+# Keycloak internal roles that should never reach OPA or downstream headers
+_KC_INTERNAL_ROLES = frozenset({
+    "offline_access",
+    "uma_authorization",
+    f"default-roles-{KC_REALM}",
+})
 
 
 async def get_jwks() -> dict:
-    """Fetch and cache Keycloak's JWKS. Refreshes every JWKS_TTL seconds."""
+    """Fetch and cache Keycloak JWKS. Thread-safe under concurrent async requests."""
     global _jwks_cache, _jwks_fetched_at
 
     now = time.time()
     if _jwks_cache and (now - _jwks_fetched_at) < JWKS_TTL:
         return _jwks_cache
 
-    logger.info("Fetching JWKS from %s", JWKS_URI)
-    async with httpx.AsyncClient(timeout=5.0) as client:
-        resp = await client.get(JWKS_URI)
-        resp.raise_for_status()
-        _jwks_cache = resp.json()
-        _jwks_fetched_at = now
-        return _jwks_cache
+    async with _jwks_lock:
+        # Double-check after acquiring the lock
+        now = time.time()
+        if _jwks_cache and (now - _jwks_fetched_at) < JWKS_TTL:
+            return _jwks_cache
+
+        logger.info("Fetching JWKS from %s", JWKS_URI)
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(JWKS_URI)
+            resp.raise_for_status()
+            _jwks_cache = resp.json()
+            _jwks_fetched_at = time.time()
+            return _jwks_cache
 
 
 def extract_roles(claims: dict) -> list[str]:
     """
-    Pull roles from the JWT. Keycloak stores client roles under
-    resource_access.<client_id>.roles and realm roles under realm_access.roles.
+    Extract meaningful roles from Keycloak JWT claims.
+    Filters out Keycloak-internal roles (offline_access, uma_authorization, etc.)
+    so only application roles (admin, user, viewer) reach OPA and downstream.
     """
     roles: list[str] = []
 
@@ -63,41 +80,20 @@ def extract_roles(claims: dict) -> list[str]:
     realm_access = claims.get("realm_access", {})
     roles.extend(realm_access.get("roles", []))
 
-    # All client-level roles
+    # Client-level roles
     resource_access = claims.get("resource_access", {})
     for client_roles in resource_access.values():
         roles.extend(client_roles.get("roles", []))
 
-    # Custom role attribute set by our Java SPI
+    # Custom role attribute set by the Java SPI (most important for ZTAM)
     custom_role = claims.get("role") or claims.get("user_role")
     if isinstance(custom_role, str) and custom_role:
         roles.append(custom_role)
     elif isinstance(custom_role, list):
         roles.extend(custom_role)
 
-    # Deduplicate and remove empty strings
-    return list({r for r in roles if r})
-
-
-def get_device_context(device_id: Optional[str]) -> dict:
-    """
-    Build a device context object.
-    In production this would query a device trust store.
-    For now: known device IDs get score 90, unknowns get 70.
-    """
-    default_score = 70
-    encrypted = True  # assume encrypted by default
-
-    if device_id:
-        # A real implementation would look up the device posture DB.
-        # Placeholder: any non-empty device ID is treated as known → score 90.
-        default_score = 90
-
-    return {
-        "id": device_id or "unknown",
-        "score": default_score,
-        "encrypted": encrypted,
-    }
+    # Deduplicate, remove empty strings, and strip Keycloak internal roles
+    return [r for r in dict.fromkeys(roles) if r and r not in _KC_INTERNAL_ROLES]
 
 
 # ─── Endpoints ───────────────────────────────────────────────────────────────
@@ -110,10 +106,11 @@ async def health():
 @app.post("/login-proxy")
 async def login_proxy(request: Request):
     """
-    Intercepts POST /api/auth/login from the TestApp frontend (via Envoy).
-    Authenticates the user against Keycloak (which uses the SPI to read
-    from TestApp's MySQL DB), then returns a TestApp-compatible HS256 token
-    so the frontend works exactly as before — without touching the app.
+    Intercepts POST /api/auth/login (routed here by Envoy).
+    Delegates authentication to Keycloak (which uses the SPI to read from
+    TestApp's MySQL DB), then returns a TestApp-compatible response.
+    The browser stores the RS256 Keycloak token; subsequent requests through
+    Envoy are validated by the check() handler below.
     """
     try:
         body = await request.json()
@@ -130,17 +127,17 @@ async def login_proxy(request: Request):
             status_code=400, media_type="application/json"
         )
 
-    # ── 1. Authenticate via Keycloak (SPI reads testapp MySQL) ──────────────
+    # ── 1. Authenticate via Keycloak token endpoint ───────────────────────────
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             kc_resp = await client.post(
                 KC_TOKEN_URI,
                 data={
-                    "grant_type": "password",
-                    "client_id": KC_CLIENT_ID,
+                    "grant_type":    "password",
+                    "client_id":     KC_CLIENT_ID,
                     "client_secret": KC_CLIENT_SECRET,
-                    "username": username,
-                    "password": password,
+                    "username":      username,
+                    "password":      password,
                 },
             )
     except Exception as exc:
@@ -156,53 +153,46 @@ async def login_proxy(request: Request):
     kc_data = kc_resp.json()
     kc_token: str = kc_data["access_token"]
 
-    # ── 2. Decode Keycloak claims (no need to re-verify — we just called KC) ─
-    import base64 as _b64, json as _json
-    raw = kc_token.split(".")[1]
-    claims = _json.loads(_b64.urlsafe_b64decode(raw + "=="))
-
-    db_user_id = claims.get("db_user_id") or claims.get("sub")
-    role: str = claims.get("role") or "user"
-    uname: str = claims.get("preferred_username", username)
-
-    logger.info("[login-proxy] Keycloak authenticated %s (role=%s, db_id=%s)",
-                uname, role, db_user_id)
-
-    # ── 3. Mint HS256 token TestApp frontend understands ─────────────────────
-    if not TESTAPP_JWT_SECRET:
-        return Response(content='{"error":"server misconfiguration"}',
+    # ── 2. Decode claims safely using python-jose (handles padding, structure) ─
+    try:
+        claims = jwt.get_unverified_claims(kc_token)
+    except JWTError as exc:
+        logger.error("Failed to decode Keycloak token: %s", exc)
+        return Response(content='{"error":"malformed token from IdP"}',
                         status_code=500, media_type="application/json")
 
-    now_ts = int(time.time())
-    downstream_token: str = jwt.encode(
-        {"sub": db_user_id, "username": uname, "role": role,
-         "iat": now_ts, "exp": now_ts + 3600},
-        TESTAPP_JWT_SECRET,
-        algorithm="HS256",
-    )
+    role: str = claims.get("role") or "viewer"
+    uname: str = claims.get("preferred_username", username)
 
-    # ── 4. Return same shape as TestApp's own /api/auth/login ────────────────
-    # IMPORTANT: return the Keycloak RS256 token (not HS256) so subsequent
-    # API calls through Envoy are validated by auth-middleware via JWKS.
-    # auth-middleware will translate to HS256 before forwarding to TestApp.
-    import json as _j
+    logger.info("[login-proxy] Keycloak authenticated %s (role=%s)", uname, role)
+
+    # ── 3. Return RS256 Keycloak token to the browser ─────────────────────────
+    # The browser stores this and sends it on every subsequent API request.
+    # The check() handler below will validate it via JWKS and translate it to
+    # an HS256 token before forwarding to TestApp.
     return Response(
-        content=_j.dumps({"token": kc_token, "username": uname, "role": role}),
+        content=json.dumps({"token": kc_token, "username": uname, "role": role}),
         status_code=200,
         media_type="application/json",
     )
 
 
-# Catch-all: Envoy HTTP ext_authz sends the original request method+path
-# to the auth service (e.g. GET /api/me, POST /api/data).
-# We handle every method on every path.
-@app.api_route("/{full_path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"])
+@app.api_route(
+    "/{full_path:path}",
+    methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"],
+)
 async def check(request: Request, full_path: str = ""):
     """
-    Called by Envoy ext_authz on every incoming request.
-    Returns 200 (allow) or 403/401 (deny).
+    Envoy ext_authz handler. Called for every request that requires auth.
+    Returns HTTP 200 (allow) with downstream headers, or 401/403 (deny).
     """
-    # ---------- 1. Extract the JWT bearer token ----------
+    # ---------- 0. CORS preflight passthrough --------------------------------
+    # Browser OPTIONS preflight requests never carry Authorization headers.
+    # Return 200 immediately so CORS works without exposing auth logic.
+    if request.method == "OPTIONS":
+        return Response(status_code=200)
+
+    # ---------- 1. Extract Bearer token --------------------------------------
     auth_header: str = request.headers.get("authorization", "")
     if not auth_header.lower().startswith("bearer "):
         logger.warning("Missing or non-Bearer Authorization header")
@@ -212,9 +202,9 @@ async def check(request: Request, full_path: str = ""):
             media_type="application/json",
         )
 
-    token = auth_header[len("bearer "):]
+    token = auth_header[7:]  # always 7 chars: "bearer "
 
-    # ---------- 2 & 3. Fetch JWKS (cached) ----------
+    # ---------- 2 & 3. Fetch JWKS (cached, lock-protected) ------------------
     try:
         jwks = await get_jwks()
     except Exception as exc:
@@ -225,13 +215,14 @@ async def check(request: Request, full_path: str = ""):
             media_type="application/json",
         )
 
-    # ---------- 4 & 5. Validate JWT ----------
+    # ---------- 4 & 5. Validate RS256 JWT (signature + expiry + aud + iss) --
     try:
         claims: dict = jwt.decode(
             token,
             jwks,
             algorithms=["RS256"],
-            options={"verify_aud": False},  # audience check done by OPA/app
+            audience=KC_CLIENT_ID,   # validates aud == KC_CLIENT_ID
+            issuer=EXPECTED_ISSUER,  # validates iss == http://keycloak:8080/realms/{realm}
         )
     except JWTError as exc:
         logger.warning("JWT validation failed: %s", exc)
@@ -241,48 +232,50 @@ async def check(request: Request, full_path: str = ""):
             media_type="application/json",
         )
 
-    # ---------- 6. Extract user claims ----------
-    user_id: str = claims.get("sub", "")
-    email: str = claims.get("email", "")
-    tenant_id: str = claims.get("tenant_id") or claims.get("azp") or KC_REALM
+    # ---------- 6. Extract user claims ---------------------------------------
+    user_id: str     = claims.get("sub", "")
+    email: str       = claims.get("email", "")
+    tenant_id: str   = claims.get("tenant_id") or claims.get("azp") or KC_REALM
     roles: list[str] = extract_roles(claims)
+
+    if not user_id:
+        return Response(
+            content='{"error":"invalid token: missing sub"}',
+            status_code=403,
+            media_type="application/json",
+        )
 
     if not roles:
         roles = ["viewer"]
 
-    # ---------- 7. Build device context ----------
-    device_id: Optional[str] = request.headers.get("x-device-id")
-    device = get_device_context(device_id)
-
-    # ---------- 8. Call OPA ----------
-    # Envoy forwards the original request path and method directly.
-    original_path: str = "/" + full_path if full_path else str(request.url.path)
-    original_method: str = request.method
+    # ---------- 7. Build OPA input -------------------------------------------
+    original_path: str   = "/" + full_path if full_path else str(request.url.path)
+    original_method: str = request.method.upper()
 
     opa_input = {
         "input": {
             "user": {
-                "id": user_id,
-                "email": email,
-                "roles": roles,
+                "id":        user_id,
+                "email":     email,
+                "roles":     roles,
                 "tenant_id": tenant_id,
             },
             "request": {
-                "path": original_path,
-                "method": original_method.upper(),
+                "path":   original_path,
+                "method": original_method,
             },
-            "device": device,
         }
     }
 
+    # ---------- 8. Single OPA call — get allow + deny_reason together --------
     try:
-        async with httpx.AsyncClient(timeout=2.0) as client:
+        async with httpx.AsyncClient(timeout=3.0) as client:
             opa_resp = await client.post(
-                f"{OPA_URL}/v1/data/authz/allow",
+                f"{OPA_URL}/v1/data/authz",
                 json=opa_input,
             )
             opa_resp.raise_for_status()
-            opa_body: dict = opa_resp.json()
+            opa_result: dict = opa_resp.json().get("result", {})
     except Exception as exc:
         logger.error("OPA call failed: %s", exc)
         return Response(
@@ -291,75 +284,55 @@ async def check(request: Request, full_path: str = ""):
             media_type="application/json",
         )
 
-    allowed: bool = opa_body.get("result", False)
+    allowed: bool    = bool(opa_result.get("allow", False))
+    deny_reason: str = opa_result.get("deny_reason", "access denied by default policy")
 
-    # ---------- 9. Allow ----------
+    # ---------- 9. Allow: translate token and set upstream headers -----------
     if allowed:
-        username: str = claims.get("preferred_username", user_id)
-        # Prefer the custom 'role' claim set by the SPI (admin/user/editor/viewer)
-        # over Keycloak's internal realm roles (default-roles-*, offline_access, etc.)
+        username: str    = claims.get("preferred_username", user_id)
         custom_role: str = claims.get("role") or claims.get("user_role") or ""
         primary_role: str = custom_role if custom_role else (roles[0] if roles else "viewer")
 
-        # ── Token translation ──────────────────────────────────────────────
-        # When TESTAPP_JWT_SECRET is set, mint an HS256 token that the
-        # downstream app (TestApp) can validate with its own JWT middleware.
-        # This avoids touching TestApp while still enforcing Keycloak auth.
         extra_headers: dict = {}
         if TESTAPP_JWT_SECRET:
             now_ts = int(time.time())
-            # db_user_id may be set by the SPI as a custom claim
-            db_user_id = claims.get("db_user_id") or claims.get("sub")
-            downstream_payload = {
-                "sub": db_user_id,
-                "username": username,
-                "role": primary_role,
-                "iat": now_ts,
-                "exp": now_ts + 3600,  # 1 hour
-            }
+            db_user_id = claims.get("db_user_id") or user_id
             downstream_token = jwt.encode(
-                downstream_payload,
+                {
+                    "sub":      db_user_id,
+                    "username": username,
+                    "role":     primary_role,
+                    "iat":      now_ts,
+                    "exp":      now_ts + 3600,
+                },
                 TESTAPP_JWT_SECRET,
                 algorithm="HS256",
             )
             extra_headers["authorization"] = f"Bearer {downstream_token}"
             logger.info(
-                "Token translated for %s (role=%s) → HS256 downstream token issued",
-                username, primary_role,
+                "Access allowed — user=%s role=%s path=%s → HS256 token issued",
+                username, primary_role, original_path,
             )
 
+        # Only send clean application roles in the header (no Keycloak internals)
+        clean_roles = [r for r in roles if r not in _KC_INTERNAL_ROLES]
         return Response(
             status_code=200,
             headers={
-                "x-user-id": user_id,
-                "x-user-roles": ",".join(roles),
-                "x-tenant-id": tenant_id,
+                "x-user-id":    user_id,
+                "x-user-roles": ",".join(clean_roles),
+                "x-tenant-id":  tenant_id,
                 **extra_headers,
             },
         )
 
-    # ---------- 10. Deny: fetch reason from OPA ----------
-    deny_reason = "access denied"
-    try:
-        async with httpx.AsyncClient(timeout=2.0) as client:
-            reason_resp = await client.post(
-                f"{OPA_URL}/v1/data/authz/deny_reason",
-                json=opa_input,
-            )
-            if reason_resp.status_code == 200:
-                reason_body = reason_resp.json()
-                deny_reason = reason_body.get("result", deny_reason)
-    except Exception:
-        pass  # non-fatal, we already have a default reason
-
+    # ---------- 10. Deny ----------------------------------------------------
     logger.info(
         "Access denied — user=%s roles=%s path=%s reason=%s",
         user_id, roles, original_path, deny_reason,
     )
-
-    import json as _json
     return Response(
-        content=_json.dumps({"error": "access denied", "reason": deny_reason}),
+        content=json.dumps({"error": "access denied", "reason": deny_reason}),
         status_code=403,
         media_type="application/json",
     )

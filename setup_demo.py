@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """Setup and run the full ZTAM demo."""
-import subprocess, json, base64, urllib.request, urllib.parse
+import json, base64, os, urllib.request, urllib.parse
 
-KC = "http://localhost:8080"
-REALM = "test-tenant"
+KC            = os.environ.get("KEYCLOAK_URL",   "http://localhost:8080")
+REALM         = os.environ.get("KC_REALM",       "test-tenant")
+KC_ADMIN_PASS = os.environ.get("KC_ADMIN_PASS",  "admin_secret_456")
+KC_CLIENT_SECRET = os.environ.get("KC_CLIENT_SECRET", "test-app-secret-2024")
+
 
 def kc(method, path, data=None, token=None, form=False):
     url = KC + path
@@ -24,11 +27,15 @@ def kc(method, path, data=None, token=None, form=False):
     except urllib.error.HTTPError as e:
         return e.code, json.loads(e.read() or b'{}')
 
+
 # --- 1. Get admin token ---
 _, d = kc("POST", "/realms/master/protocol/openid-connect/token", {
     "client_id": "admin-cli", "grant_type": "password",
-    "username": "admin", "password": "admin_secret_456"
+    "username": "admin", "password": KC_ADMIN_PASS
 }, form=True)
+if "access_token" not in d:
+    print(f"ERROR: could not obtain admin token: {d}")
+    raise SystemExit(1)
 ADMIN = d["access_token"]
 
 # --- 2. Delete ALL native Keycloak users (force SPI to serve them) ---
@@ -48,15 +55,16 @@ if not deleted:
 # --- 3. Login alice via Keycloak (SPI reads from testapp-db) ---
 _, resp = kc("POST", f"/realms/{REALM}/protocol/openid-connect/token", {
     "grant_type": "password", "client_id": "test-app",
-    "client_secret": "test-app-secret-2024",
+    "client_secret": KC_CLIENT_SECRET,
     "username": "alice", "password": "secret123"
 }, form=True)
 
 print("\n=== LOGIN alice via Keycloak+SPI+testapp-db ===")
 if "access_token" in resp:
     tok = resp["access_token"]
-    pad = lambda s: s + "=" * (4 - len(s) % 4)
-    payload = json.loads(base64.b64decode(pad(tok.split(".")[1])))
+    raw = tok.split(".")[1]
+    padding = (4 - len(raw) % 4) % 4
+    payload = json.loads(base64.urlsafe_b64decode(raw + "=" * padding))
     print(f"  Status:   SUCCESS")
     print(f"  Username: {payload.get('preferred_username')}")
     print(f"  Issuer:   {payload.get('iss')}")

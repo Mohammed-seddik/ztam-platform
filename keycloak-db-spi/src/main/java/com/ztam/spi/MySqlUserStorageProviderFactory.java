@@ -1,16 +1,16 @@
 package com.ztam.spi;
 
+import java.util.List;
+import java.util.logging.Logger;
+
 import org.keycloak.component.ComponentModel;
 import org.keycloak.models.KeycloakSession;
 import org.keycloak.provider.ProviderConfigProperty;
 import org.keycloak.provider.ProviderConfigurationBuilder;
 import org.keycloak.storage.UserStorageProviderFactory;
 
-import java.util.List;
-import java.util.logging.Logger;
-
 /**
- * Keycloak 24 User Storage SPI Factory — registered as "mysql-db-provider".
+ * Keycloak 26 User Storage SPI Factory — registered as "mysql-db-provider".
  * Appears in the Keycloak Admin UI under User Federation as "MySQL DB Provider".
  */
 public class MySqlUserStorageProviderFactory
@@ -104,9 +104,9 @@ public class MySqlUserStorageProviderFactory
                     .add()
                 .property()
                     .name(CFG_HASH).label("Hash Algorithm")
-                    .helpText("Password hashing algorithm (bcrypt / sha256 / md5)")
+                    .helpText("Password hashing algorithm. Only bcrypt is supported (secure key-stretching).")
                     .type(ProviderConfigProperty.LIST_TYPE)
-                    .options("bcrypt", "sha256", "md5")
+                    .options("bcrypt")
                     .defaultValue("bcrypt")
                     .add()
                 .build();
