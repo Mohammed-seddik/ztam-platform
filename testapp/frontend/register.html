@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Register – TaskApp</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Segoe UI', sans-serif;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 60%, #0f3460 100%);
+    }
+    .card {
+      background: #fff;
+      border-radius: 12px;
+      padding: 40px 36px;
+      width: 100%;
+      max-width: 380px;
+      box-shadow: 0 20px 60px rgba(0,0,0,.4);
+    }
+    h1 { font-size: 1.6rem; color: #0f3460; margin-bottom: 6px; }
+    p.sub { font-size: .85rem; color: #666; margin-bottom: 24px; }
+    label { display: block; font-size: .85rem; font-weight: 600; color: #333; margin-bottom: 4px; }
+    input, select {
+      width: 100%; padding: 10px 12px;
+      border: 1.5px solid #d0d0d0; border-radius: 8px;
+      font-size: .95rem; outline: none; transition: border .2s;
+      margin-bottom: 16px; background: #fff;
+    }
+    input:focus, select:focus { border-color: #0f3460; }
+    button {
+      width: 100%; padding: 11px;
+      background: #0f3460; color: #fff;
+      border: none; border-radius: 8px;
+      font-size: 1rem; font-weight: 600;
+      cursor: pointer; transition: background .2s;
+    }
+    button:hover { background: #16213e; }
+    .msg { margin-top: 14px; text-align: center; font-size: .88rem; }
+    .msg.err  { color: #c0392b; }
+    .msg.ok   { color: #27ae60; }
+    .link-row { margin-top: 18px; text-align: center; font-size: .85rem; color: #555; }
+    .link-row a { color: #0f3460; font-weight: 600; text-decoration: none; }
+    .link-row a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+<div class="card">
+  <h1>Create account</h1>
+  <p class="sub">Join TaskApp to manage your tasks</p>
+
+  <form id="registerForm">
+    <label for="username">Username</label>
+    <input id="username" type="text" placeholder="Choose a username" required autocomplete="username"/>
+
+    <label for="password">Password</label>
+    <input id="password" type="password" placeholder="Min 6 characters" required autocomplete="new-password"/>
+
+    <label for="role">Role</label>
+    <select id="role">
+      <option value="user" selected>User</option>
+      <option value="admin">Admin</option>
+    </select>
+
+    <button type="submit">Create Account</button>
+  </form>
+
+  <div id="msg" class="msg"></div>
+
+  <div class="link-row">
+    Already have an account? <a href="/login.html">Sign in</a>
+  </div>
+</div>
+
+<script>
+  if (localStorage.getItem('jwt')) window.location.href = '/dashboard.html';
+
+  document.getElementById('registerForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const msg = document.getElementById('msg');
+    msg.textContent = '';
+    msg.className   = 'msg';
+
+    const username = document.getElementById('username').value.trim();
+    const password = document.getElementById('password').value;
+    const role     = document.getElementById('role').value;
+
+    if (password.length < 6) {
+      msg.textContent = 'Password must be at least 6 characters.';
+      msg.className   = 'msg err';
+      return;
+    }
+
+    try {
+      const res  = await fetch('/api/auth/register', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ username, password, role }),
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        msg.textContent = data.error || 'Registration failed.';
+        msg.className   = 'msg err';
+        return;
+      }
+
+      msg.textContent = 'Account created! Redirecting to login…';
+      msg.className   = 'msg ok';
+      setTimeout(() => window.location.href = '/login.html', 1500);
+    } catch (err) {
+      msg.textContent = 'Network error. Is the server running?';
+      msg.className   = 'msg err';
+    }
+  });
+</script>
+</body>
+</html>
