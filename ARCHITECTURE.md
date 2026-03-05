@@ -54,6 +54,7 @@ Browser ─── port 80 ───►│  │  Envoy   │───────
 | `GET /register.html` | TestApp | **disabled** |
 | `POST /api/auth/login` | Auth Middleware (`/login-proxy`) | **disabled** |
 | `POST /api/auth/register` | TestApp | **disabled** |
+| `GET /api/sessions/last` | Auth Middleware (`/sessions/last`) | **disabled** (validates token internally) |
 | Everything else | TestApp | **ENABLED** ← enforced |
 
 **`failure_mode_allow: false`** — if auth-middleware is unreachable, all requests are denied.
@@ -64,7 +65,7 @@ Browser ─── port 80 ───►│  │  Envoy   │───────
 
 **Role:** The brain. Validates every token and decides allow/deny.
 
-**Two endpoints:**
+**Three endpoints:**
 
 #### `POST /login-proxy`
 Called by Envoy for `POST /api/auth/login`. Does NOT validate a token — it IS the login.
@@ -81,6 +82,20 @@ Request body: { "username": "alice", "password": "secret123" }
 
 The token returned is the **Keycloak RS256 token** — not HS256 — so that all subsequent API
 calls can be validated against Keycloak's JWKS.
+
+#### `GET /sessions/last`
+Called by Envoy for `GET /api/sessions/last`. Returns the user's most recent Keycloak session.
+
+```
+1. Extract Bearer token from Authorization header     →  401 if missing
+2. Validate RS256 JWT via JWKS (same as check)         →  403 if invalid
+3. Extract user ID (sub claim)
+4. Get Keycloak Admin API token (cached 4 min)
+5. GET /admin/realms/{realm}/users/{userId}/sessions
+6. Return the session with the highest lastAccess timestamp
+```
+
+Response: `{ "session_id", "username", "ip_address", "started_at", "last_access", "clients" }`
 
 #### `/{full_path}` (catch-all — ext_authz handler)
 Called by Envoy for every other request. Validates the incoming token and decides allow/deny.
@@ -338,6 +353,8 @@ TestApp receives exactly what it would receive if you called it directly — it 
 | `KC_REALM` | Realm name | `test-tenant` |
 | `KC_CLIENT_ID` | Keycloak client ID | `test-app` |
 | `KC_CLIENT_SECRET` | Client secret (from Keycloak Admin) | `test-app-secret-2024` |
+| `KC_ADMIN_USER` | Keycloak admin username (for session API) | `admin` |
+| `KC_ADMIN_PASS` | Keycloak admin password (for session API) | — |
 | `OPA_URL` | OPA base URL | `http://opa:8181` |
 | `TESTAPP_JWT_SECRET` | TestApp's HS256 signing secret | `super_secret_jwt_key_for_ztam_demo_2024` |
 

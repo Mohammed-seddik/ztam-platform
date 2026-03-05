@@ -24,11 +24,14 @@ KEYCLOAK_URL: str = os.getenv("KEYCLOAK_URL", "http://keycloak:8080")
 KC_REALM: str = os.getenv("KC_REALM", "test-tenant")
 KC_CLIENT_ID: str = os.getenv("KC_CLIENT_ID", "test-app")
 KC_CLIENT_SECRET: str = os.getenv("KC_CLIENT_SECRET", "")
+KC_ADMIN_USER: str = os.getenv("KC_ADMIN_USER", "admin")
+KC_ADMIN_PASS: str = os.getenv("KC_ADMIN_PASS", "")
 OPA_URL: str = os.getenv("OPA_URL", "http://opa:8181")
 TESTAPP_JWT_SECRET: Optional[str] = os.getenv("TESTAPP_JWT_SECRET")
 
 JWKS_URI: str = f"{KEYCLOAK_URL}/realms/{KC_REALM}/protocol/openid-connect/certs"
 KC_TOKEN_URI: str = f"{KEYCLOAK_URL}/realms/{KC_REALM}/protocol/openid-connect/token"
+KC_ADMIN_TOKEN_URI: str = f"{KEYCLOAK_URL}/realms/master/protocol/openid-connect/token"
 EXPECTED_ISSUER: str = f"{KEYCLOAK_URL}/realms/{KC_REALM}"
 
 # ─── JWKS in-memory cache with asyncio lock (prevents thundering herd) ───────
@@ -66,6 +69,42 @@ async def get_jwks() -> dict:
             _jwks_cache = resp.json()
             _jwks_fetched_at = time.time()
             return _jwks_cache
+
+
+# ─── Keycloak admin token cache (for Admin REST API calls) ────────────────────
+_admin_token: str = ""
+_admin_token_fetched_at: float = 0.0
+_admin_token_lock = asyncio.Lock()
+ADMIN_TOKEN_TTL: int = 240  # seconds (tokens last 5 min, refresh at 4 min)
+
+
+async def get_admin_token() -> str:
+    """Fetch and cache a Keycloak master-realm admin token."""
+    global _admin_token, _admin_token_fetched_at
+
+    now = time.time()
+    if _admin_token and (now - _admin_token_fetched_at) < ADMIN_TOKEN_TTL:
+        return _admin_token
+
+    async with _admin_token_lock:
+        now = time.time()
+        if _admin_token and (now - _admin_token_fetched_at) < ADMIN_TOKEN_TTL:
+            return _admin_token
+
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                KC_ADMIN_TOKEN_URI,
+                data={
+                    "grant_type":    "password",
+                    "client_id":     "admin-cli",
+                    "username":      KC_ADMIN_USER,
+                    "password":      KC_ADMIN_PASS,
+                },
+            )
+            resp.raise_for_status()
+            _admin_token = resp.json()["access_token"]
+            _admin_token_fetched_at = time.time()
+            return _admin_token
 
 
 def extract_roles(claims: dict) -> list[str]:
@@ -172,6 +211,117 @@ async def login_proxy(request: Request):
     # an HS256 token before forwarding to TestApp.
     return Response(
         content=json.dumps({"token": kc_token, "username": uname, "role": role}),
+        status_code=200,
+        media_type="application/json",
+    )
+
+
+@app.get("/sessions/last")
+async def last_session(request: Request):
+    """
+    Returns the most recent Keycloak session for the authenticated user.
+    The caller must provide a valid RS256 Bearer token (same as any other
+    authenticated endpoint). Envoy routes /api/sessions/last here with
+    ext_authz disabled — token validation happens inline.
+    """
+    # ── 1. Extract and validate Bearer token ──────────────────────────────────
+    auth_header: str = request.headers.get("authorization", "")
+    if not auth_header.lower().startswith("bearer "):
+        return Response(
+            content='{"error":"missing token"}',
+            status_code=401,
+            media_type="application/json",
+        )
+
+    token = auth_header[7:]
+
+    try:
+        jwks = await get_jwks()
+    except Exception as exc:
+        logger.error("Failed to fetch JWKS: %s", exc)
+        return Response(
+            content='{"error":"auth service unavailable"}',
+            status_code=503,
+            media_type="application/json",
+        )
+
+    try:
+        claims: dict = jwt.decode(
+            token,
+            jwks,
+            algorithms=["RS256"],
+            audience=KC_CLIENT_ID,
+            issuer=EXPECTED_ISSUER,
+        )
+    except JWTError as exc:
+        logger.warning("JWT validation failed: %s", exc)
+        return Response(
+            content='{"error":"invalid or expired token"}',
+            status_code=403,
+            media_type="application/json",
+        )
+
+    user_id: str = claims.get("sub", "")
+    if not user_id:
+        return Response(
+            content='{"error":"invalid token: missing sub"}',
+            status_code=403,
+            media_type="application/json",
+        )
+
+    # ── 2. Get Keycloak admin token ───────────────────────────────────────────
+    try:
+        admin_token = await get_admin_token()
+    except Exception as exc:
+        logger.error("Failed to obtain Keycloak admin token: %s", exc)
+        return Response(
+            content='{"error":"session service unavailable"}',
+            status_code=503,
+            media_type="application/json",
+        )
+
+    # ── 3. Fetch user sessions from Keycloak Admin API ────────────────────────
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            kc_resp = await client.get(
+                f"{KEYCLOAK_URL}/admin/realms/{KC_REALM}/users/{user_id}/sessions",
+                headers={"Authorization": f"Bearer {admin_token}"},
+            )
+            kc_resp.raise_for_status()
+            sessions: list = kc_resp.json()
+    except Exception as exc:
+        logger.error("Keycloak sessions API call failed: %s", exc)
+        return Response(
+            content='{"error":"could not retrieve sessions"}',
+            status_code=502,
+            media_type="application/json",
+        )
+
+    if not sessions:
+        return Response(
+            content='{"error":"no active sessions found"}',
+            status_code=404,
+            media_type="application/json",
+        )
+
+    # ── 4. Return the most recent session (sorted by lastAccess) ──────────────
+    last = max(sessions, key=lambda s: s.get("lastAccess", 0))
+
+    logger.info(
+        "[sessions/last] Returning last session for user=%s session_id=%s",
+        user_id,
+        last.get("id"),
+    )
+
+    return Response(
+        content=json.dumps({
+            "session_id":  last.get("id"),
+            "username":    last.get("username"),
+            "ip_address":  last.get("ipAddress"),
+            "started_at":  last.get("start"),
+            "last_access":  last.get("lastAccess"),
+            "clients":     last.get("clients", {}),
+        }),
         status_code=200,
         media_type="application/json",
     )

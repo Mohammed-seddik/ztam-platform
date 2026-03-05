@@ -67,6 +67,8 @@ services:
       KC_REALM: ${KC_REALM}
       KC_CLIENT_ID: ${KC_CLIENT_ID:-test-app}
       KC_CLIENT_SECRET: ${KC_CLIENT_SECRET:-test-app-secret-2024}
+      KC_ADMIN_USER: ${KC_ADMIN_USER:-admin}
+      KC_ADMIN_PASS: ${KC_ADMIN_PASS}
       OPA_URL: http://opa:8181
       TESTAPP_JWT_SECRET: ${TESTAPP_JWT_SECRET:-super_secret_jwt_key_for_ztam_demo_2024}
     ports:
