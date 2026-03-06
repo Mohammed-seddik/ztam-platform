@@ -6,9 +6,44 @@ const db = require("../db");
 
 const SALT_ROUNDS = 12;
 
+// ── Simple in-process rate limiter ────────────────────────────────────────────
+// Limits both register and login attempts per source IP.
+// For production with multiple Node processes, replace with Redis-backed limiter.
+const _rlMap = new Map(); // ip → { count, resetAt }
+const RATE_WINDOW_MS = 60_000;
+const RATE_LIMIT = 10;
+
+function checkRateLimit(ip) {
+  const now = Date.now();
+  let entry = _rlMap.get(ip);
+  if (!entry || now >= entry.resetAt) {
+    _rlMap.set(ip, { count: 1, resetAt: now + RATE_WINDOW_MS });
+    return true;
+  }
+  if (entry.count >= RATE_LIMIT) return false;
+  entry.count += 1;
+  return true;
+}
+
+function getClientIp(req) {
+  // x-forwarded-for is set by Envoy; fall back to socket address
+  const xff = req.headers["x-forwarded-for"];
+  return (
+    (xff ? xff.split(",")[0].trim() : null) ||
+    req.socket.remoteAddress ||
+    "unknown"
+  );
+}
+
 // ── POST /api/auth/register ───────────────────────────────────────────────────
 router.post("/register", async (req, res) => {
-  const { username, password, role } = req.body;
+  if (!checkRateLimit(getClientIp(req))) {
+    return res
+      .status(429)
+      .json({ error: "Too many requests. Please try again later." });
+  }
+
+  const { username, password } = req.body;
 
   if (!username || !password) {
     return res
@@ -16,8 +51,26 @@ router.post("/register", async (req, res) => {
       .json({ error: "username and password are required." });
   }
 
-  const allowedRoles = ["admin", "user"];
-  const userRole = allowedRoles.includes(role) ? role : "user";
+  // Server-side input length limits (prevent oversized-payload abuse)
+  if (
+    typeof username !== "string" ||
+    username.trim().length < 3 ||
+    username.trim().length > 50
+  ) {
+    return res.status(400).json({ error: "Username must be 3–50 characters." });
+  }
+  if (
+    typeof password !== "string" ||
+    password.length < 8 ||
+    password.length > 200
+  ) {
+    return res
+      .status(400)
+      .json({ error: "Password must be 8–200 characters." });
+  }
+
+  // Role is always 'user' — never trust client-supplied role
+  const userRole = "user";
 
   try {
     const hash = await bcrypt.hash(password, SALT_ROUNDS);
@@ -38,7 +91,15 @@ router.post("/register", async (req, res) => {
 });
 
 // ── POST /api/auth/login ──────────────────────────────────────────────────────
+// NOTE: This route is never hit from outside — Envoy rewrites POST /api/auth/login
+// to auth-middleware /login-proxy before forwarding. It exists as a fallback only.
 router.post("/login", async (req, res) => {
+  if (!checkRateLimit(getClientIp(req))) {
+    return res
+      .status(429)
+      .json({ error: "Too many requests. Please try again later." });
+  }
+
   const { username, password } = req.body;
 
   if (!username || !password) {

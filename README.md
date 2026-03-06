@@ -21,15 +21,15 @@ HTTP :80 → 301 redirect → HTTPS :443
 
 ## What's Inside
 
-| Container | Image | Exposed Port | Role |
-|---|---|---|---|
-| `envoy` | envoyproxy/envoy:v1.28.7 | **80, 443** | TLS termination + reverse proxy + ext_authz |
-| `keycloak` | keycloak:26.3.0 | 8080 (admin only) | Identity provider + session management |
-| `auth-middleware` | FastAPI / Python 3.12 | — (internal) | JWT validation + rate limiting + token translation |
-| `opa` | openpolicyagent/opa:0.64.1 | — (internal) | Policy engine (Rego rules) |
-| `testapp` | Node.js 20 | — (internal) | Protected app — source code untouched |
-| `testapp-db` | mysql:8 | — (internal) | TestApp's user + task database |
-| `postgres` | postgres:16 | — (internal) | Keycloak's internal storage |
+| Container         | Image                      | Exposed Port      | Role                                               |
+| ----------------- | -------------------------- | ----------------- | -------------------------------------------------- |
+| `envoy`           | envoyproxy/envoy:v1.28.7   | **80, 443**       | TLS termination + reverse proxy + ext_authz        |
+| `keycloak`        | keycloak:26.5.5            | 8080 (admin only) | Identity provider + session management             |
+| `auth-middleware` | FastAPI / Python 3.12      | — (internal)      | JWT validation + rate limiting + token translation |
+| `opa`             | openpolicyagent/opa:0.64.1 | — (internal)      | Policy engine (Rego rules)                         |
+| `testapp`         | Node.js 20                 | — (internal)      | Protected app — source code untouched              |
+| `testapp-db`      | mysql:8                    | — (internal)      | TestApp's user + task database                     |
+| `postgres`        | postgres:16                | — (internal)      | Keycloak's internal storage                        |
 
 > All internal services are **not reachable from outside Docker** — only Envoy (443/80) and Keycloak admin (8080) are exposed. This enforces the Zero Trust perimeter.
 
@@ -98,11 +98,18 @@ TESTAPP_JWT_SECRET=<random-64-chars>
 docker compose up -d --build
 ```
 
+> **Development vs Production:**
+> The `keycloak` service runs with `command: start-dev` by default.
+> `start-dev` is suitable for local testing only.
+> For a production deployment, change it to `start` and provide proper
+> `KC_HOSTNAME`, TLS certificates, and firewall rules to restrict port 8080.
+
 Wait ~30 s for Keycloak to finish initializing, then:
 
 ### 5 — Prime Keycloak (one-time)
 
-Creates the realm, client, SPI registration, and JWT protocol mappers automatically:
+Automatically creates the realm, Keycloak client, MySQL SPI registration,
+and JWT protocol mappers, then smoke-tests the full login flow:
 
 ```bash
 python3 setup_demo.py
@@ -122,22 +129,22 @@ HTTP requests to `http://localhost` are automatically redirected to HTTPS.
 
 All users live in TestApp's MySQL DB. Keycloak reads and authenticates them via the SPI.
 
-| Username | Password | Role | What they see |
-|---|---|---|---|
-| `alice` | `secret123` | **admin** | All tasks from all users |
-| `charlie` | `pass123` | **user** | Only their own tasks |
-| `testuser` | `test123` | **user** | Only their own tasks |
-| `demouser` | `demo123` | **admin** | All tasks from all users |
+| Username   | Password    | Role      | What they see            |
+| ---------- | ----------- | --------- | ------------------------ |
+| `alice`    | `secret123` | **admin** | All tasks from all users |
+| `charlie`  | `pass123`   | **user**  | Only their own tasks     |
+| `testuser` | `test123`   | **user**  | Only their own tasks     |
+| `demouser` | `demo123`   | **admin** | All tasks from all users |
 
 ---
 
 ## Exposed Ports
 
-| URL | What |
-|---|---|
-| `https://localhost` | ✅ Main entry point — use this |
-| `http://localhost` | Redirects → HTTPS (301) |
-| `http://localhost:8080` | Keycloak Admin Console |
+| URL                     | What                           |
+| ----------------------- | ------------------------------ |
+| `https://localhost`     | ✅ Main entry point — use this |
+| `http://localhost`      | Redirects → HTTPS (301)        |
+| `http://localhost:8080` | Keycloak Admin Console         |
 
 **Keycloak admin login:** `admin` / `<KC_ADMIN_PASS from .env>`
 
@@ -173,12 +180,12 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for full diagrams.
 
 Rules are in `policies/authz.rego`. Permissions are in `policies/permissions.json` (hot-reloaded).
 
-| Role | Methods | Paths |
-|---|---|---|
-| **admin** | All | All |
+| Role       | Methods                       | Paths                              |
+| ---------- | ----------------------------- | ---------------------------------- |
+| **admin**  | All                           | All                                |
 | **editor** | GET, POST, PUT, PATCH, DELETE | `/api/*` — blocked from `/admin/*` |
-| **user** | GET, POST, PUT, PATCH, DELETE | `/api/*` — blocked from `/admin/*` |
-| **viewer** | GET | `/api/*` — blocked from `/admin/*` |
+| **user**   | GET, POST, PUT, PATCH, DELETE | `/api/*` — blocked from `/admin/*` |
+| **viewer** | GET                           | `/api/*` — blocked from `/admin/*` |
 
 **Device trust:** admin paths require device score ≥ 80 + encrypted=true. All other paths require score ≥ 60.
 
@@ -246,18 +253,18 @@ curl -sk https://localhost/api/tasks \
 
 ## Security Properties
 
-| Property | Mechanism |
-|---|---|
-| Transport security | TLS 1.2/1.3 (ECDHE ciphers only), HTTP → 301 redirect |
-| HSTS | `Strict-Transport-Security: max-age=63072000; includeSubDomains; preload` |
-| Security headers | CSP, X-Content-Type-Options, X-Frame-Options, Referrer-Policy, Permissions-Policy |
-| Authentication | RS256 JWT validated against Keycloak JWKS on every request |
-| Authorization | OPA Rego: role + path + method + device score checked before every API call |
-| Rate limiting | Login endpoint: max 10 attempts per 60 s per IP → HTTP 429 |
-| Fail-closed | `failure_mode_allow: false` — auth service down = all traffic denied |
-| Zero Trust perimeter | OPA, auth-middleware, testapp ports not exposed outside Docker network |
-| Read-only DB access | SPI issues `SELECT` only — never writes to app's MySQL |
-| Token translation | RS256 → HS256 translation lets app work with its own existing JWT secret |
-| JWKS caching | 5-minute in-memory cache — JWKS endpoint never becomes a bottleneck |
-| Session visibility | Every login creates a real Keycloak session — visible in Admin Console |
-| Startup validation | auth-middleware refuses to start if required secrets are missing |
+| Property             | Mechanism                                                                         |
+| -------------------- | --------------------------------------------------------------------------------- |
+| Transport security   | TLS 1.2/1.3 (ECDHE ciphers only), HTTP → 301 redirect                             |
+| HSTS                 | `Strict-Transport-Security: max-age=63072000; includeSubDomains; preload`         |
+| Security headers     | CSP, X-Content-Type-Options, X-Frame-Options, Referrer-Policy, Permissions-Policy |
+| Authentication       | RS256 JWT validated against Keycloak JWKS on every request                        |
+| Authorization        | OPA Rego: role + path + method + device score checked before every API call       |
+| Rate limiting        | Login endpoint: max 10 attempts per 60 s per IP → HTTP 429                        |
+| Fail-closed          | `failure_mode_allow: false` — auth service down = all traffic denied              |
+| Zero Trust perimeter | OPA, auth-middleware, testapp ports not exposed outside Docker network            |
+| Read-only DB access  | SPI issues `SELECT` only — never writes to app's MySQL                            |
+| Token translation    | RS256 → HS256 translation lets app work with its own existing JWT secret          |
+| JWKS caching         | 5-minute in-memory cache — JWKS endpoint never becomes a bottleneck               |
+| Session visibility   | Every login creates a real Keycloak session — visible in Admin Console            |
+| Startup validation   | auth-middleware refuses to start if required secrets are missing                  |

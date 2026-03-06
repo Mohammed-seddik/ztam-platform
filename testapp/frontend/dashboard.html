@@ -192,6 +192,28 @@
 
   if (!token) window.location.href = '/login.html';
 
+  // Proactive expiry check: decode JWT exp claim and redirect if already expired.
+  function isTokenExpired(tok) {
+    try {
+      const payload = JSON.parse(atob(tok.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
+      return payload.exp && payload.exp < Math.floor(Date.now() / 1000);
+    } catch { return true; }
+  }
+  if (isTokenExpired(token)) {
+    localStorage.clear();
+    window.location.href = '/login.html';
+  }
+
+  // Central function – clears session and redirects to login on auth failure.
+  function handleAuthFailure(status) {
+    if (status === 401 || status === 403) {
+      localStorage.clear();
+      window.location.href = '/login.html';
+      return true;
+    }
+    return false;
+  }
+
   document.getElementById('navUser').textContent = username;
   document.getElementById('navRole').textContent = role;
 
@@ -230,11 +252,7 @@
     try {
       const res  = await fetch('/api/tasks', { headers: authHeaders() });
 
-      if (res.status === 401) {
-        localStorage.clear();
-        window.location.href = '/login.html';
-        return;
-      }
+      if (handleAuthFailure(res.status)) return;
 
       const tasks = await res.json();
       loadMsg.textContent = '';
@@ -308,6 +326,8 @@
       });
       const data = await res.json();
 
+      if (handleAuthFailure(res.status)) return;
+
       if (!res.ok) {
         addMsg.textContent = data.error || 'Failed to add task.';
         addMsg.className   = 'err';
@@ -344,6 +364,7 @@
       });
 
       if (!res.ok) {
+        if (handleAuthFailure(res.status)) return;
         const data = await res.json();
         alert(data.error || 'Delete failed.');
         return;

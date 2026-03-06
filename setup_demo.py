@@ -1,13 +1,60 @@
 #!/usr/bin/env python3
-"""Setup and run the full ZTAM demo."""
-import json, base64, os, urllib.request, urllib.parse
+"""
+ZTAM Platform — One-shot Keycloak setup + smoke test.
 
-KC            = os.environ.get("KEYCLOAK_URL",   "http://localhost:8080")
-REALM         = os.environ.get("KC_REALM",       "test-tenant")
-KC_ADMIN_PASS = os.environ["KC_ADMIN_PASS"]
-KC_CLIENT_SECRET = os.environ["KC_CLIENT_SECRET"]
+Idempotent: safe to run multiple times.
+Reads credentials from .env (in project root) then from environment.
+
+Steps:
+  1.  Load .env
+  2.  Get Keycloak admin token
+  3.  Create realm  (test-tenant)
+  4.  Create client (test-app, confidential, directAccessGrants)
+  5.  Set client secret
+  6.  Register MySQL SPI user-federation component
+  7.  Create protocol mappers  (role, db_user_id)
+  8.  Delete any native Keycloak users (force SPI)
+  9.  Smoke-test login as alice
+  10. Print summary
+"""
+import json, base64, os, sys, urllib.request, urllib.parse
+from pathlib import Path
+
+# ── Load .env from project root ────────────────────────────────────────────────
+_env_path = Path(__file__).parent / ".env"
+if _env_path.exists():
+    for _line in _env_path.read_text().splitlines():
+        _line = _line.strip()
+        if not _line or _line.startswith("#") or "=" not in _line:
+            continue
+        _k, _, _v = _line.partition("=")
+        os.environ.setdefault(_k.strip(), _v.strip())
+
+# ── Config ─────────────────────────────────────────────────────────────────────
+KC               = os.environ.get("KEYCLOAK_URL",    "http://localhost:8080")
+REALM            = os.environ.get("KC_REALM",        "test-tenant")
+KC_ADMIN_USER    = os.environ.get("KC_ADMIN_USER",   "admin")
+KC_ADMIN_PASS    = os.environ.get("KC_ADMIN_PASS",   "")
+KC_CLIENT_ID     = os.environ.get("KC_CLIENT_ID",    "test-app")
+KC_CLIENT_SECRET = os.environ.get("KC_CLIENT_SECRET","")
+MYSQL_HOST       = os.environ.get("DB_HOST",         "testapp-db")
+MYSQL_PORT       = os.environ.get("DB_PORT",         "3306")
+MYSQL_DB         = os.environ.get("MYSQL_DATABASE",  "taskapp")
+MYSQL_USER       = os.environ.get("MYSQL_USER",      "")
+MYSQL_PASS       = os.environ.get("MYSQL_PASSWORD",  "")
+
+for _var, _val in (
+    ("KC_ADMIN_PASS",    KC_ADMIN_PASS),
+    ("KC_CLIENT_SECRET", KC_CLIENT_SECRET),
+    ("MYSQL_USER",       MYSQL_USER),
+    ("MYSQL_PASSWORD",   MYSQL_PASS),
+):
+    if not _val:
+        print(f"ERROR: required variable {_var!r} is not set in .env")
+        sys.exit(1)
 
 
+# ── HTTP helper ────────────────────────────────────────────────────────────────
 def kc(method, path, data=None, token=None, form=False):
     url = KC + path
     headers = {}
@@ -23,73 +70,249 @@ def kc(method, path, data=None, token=None, form=False):
     req = urllib.request.Request(url, data=body, headers=headers, method=method)
     try:
         with urllib.request.urlopen(req) as r:
-            return r.getcode(), json.loads(r.read() or b'{}')
+            raw = r.read()
+            return r.getcode(), (json.loads(raw) if raw else {})
     except urllib.error.HTTPError as e:
-        return e.code, json.loads(e.read() or b'{}')
+        raw = e.read()
+        return e.code, (json.loads(raw) if raw else {})
 
 
-# --- 1. Get admin token ---
-_, d = kc("POST", "/realms/master/protocol/openid-connect/token", {
+def step(n, msg):
+    print(f"\n[{n}] {msg}")
+
+
+# ── 1. Admin token ─────────────────────────────────────────────────────────────
+step(1, "Authenticating with Keycloak admin...")
+code, d = kc("POST", "/realms/master/protocol/openid-connect/token", {
     "client_id": "admin-cli", "grant_type": "password",
-    "username": "admin", "password": KC_ADMIN_PASS
+    "username": KC_ADMIN_USER, "password": KC_ADMIN_PASS,
 }, form=True)
 if "access_token" not in d:
-    print(f"ERROR: could not obtain admin token: {d}")
-    raise SystemExit(1)
+    print(f"   ERROR: could not obtain admin token (HTTP {code}): {d}")
+    print("   Is Keycloak running?  docker compose up -d")
+    sys.exit(1)
 ADMIN = d["access_token"]
+print("   ✓ Admin authenticated")
 
-# --- 2. Delete ALL native Keycloak users (force SPI to serve them) ---
-_, users = kc("GET", f"/admin/realms/{REALM}/users?max=50", token=ADMIN)
+
+# ── 2. Create realm ────────────────────────────────────────────────────────────
+step(2, f"Ensuring realm '{REALM}' exists...")
+code, _ = kc("POST", "/admin/realms", {
+    "realm": REALM,
+    "enabled": True,
+    "displayName": "ZTAM Demo",
+    "registrationAllowed": False,
+    "loginTheme": "keycloak",
+    "accessTokenLifespan": 3600,
+    "ssoSessionMaxLifespan": 36000,
+}, token=ADMIN)
+if code == 201:
+    print(f"   ✓ Realm '{REALM}' created")
+elif code == 409:
+    print(f"   ✓ Realm '{REALM}' already exists — skipping creation")
+else:
+    print(f"   ERROR: realm creation returned HTTP {code}")
+    sys.exit(1)
+
+
+# ── 3. Create client ───────────────────────────────────────────────────────────
+step(3, f"Ensuring client '{KC_CLIENT_ID}' exists...")
+code, _ = kc("POST", f"/admin/realms/{REALM}/clients", {
+    "clientId":                 KC_CLIENT_ID,
+    "name":                     KC_CLIENT_ID,
+    "enabled":                  True,
+    "protocol":                 "openid-connect",
+    "publicClient":             False,
+    "directAccessGrantsEnabled": True,
+    "standardFlowEnabled":      True,
+    "serviceAccountsEnabled":   False,
+    "secret":                   KC_CLIENT_SECRET,
+}, token=ADMIN)
+if code == 201:
+    print(f"   ✓ Client '{KC_CLIENT_ID}' created")
+elif code == 409:
+    print(f"   ✓ Client '{KC_CLIENT_ID}' already exists — skipping creation")
+else:
+    print(f"   ERROR: client creation returned HTTP {code}")
+    sys.exit(1)
+
+# Get client UUID (needed for sub-resource API calls)
+code, clients = kc("GET",
+    f"/admin/realms/{REALM}/clients?clientId={KC_CLIENT_ID}&max=1",
+    token=ADMIN)
+if not clients:
+    print("   ERROR: could not resolve client UUID")
+    sys.exit(1)
+CLIENT_UUID = clients[0]["id"]
+print(f"   ✓ Client UUID: {CLIENT_UUID}")
+
+# ── Ensure client secret matches .env ─────────────────────────────────────────
+code, _ = kc("PUT",
+    f"/admin/realms/{REALM}/clients/{CLIENT_UUID}/client-secret",
+    {"type": "secret", "value": KC_CLIENT_SECRET},
+    token=ADMIN)
+# 204 = updated, 200 = already correct
+if code in (200, 204):
+    print("   ✓ Client secret synchronized")
+
+
+# ── 4. Register MySQL User-Federation SPI ─────────────────────────────────────
+step(4, "Registering MySQL SPI user-federation component...")
+code, components = kc("GET",
+    f"/admin/realms/{REALM}/components?type=org.keycloak.storage.UserStorageProvider",
+    token=ADMIN)
+existing_spi = next(
+    (c for c in (components if isinstance(components, list) else [])
+     if c.get("providerId") == "mysql-db-provider"), None)
+
+if existing_spi:
+    print("   ✓ MySQL SPI already registered — skipping")
+else:
+    code, _ = kc("POST",
+        f"/admin/realms/{REALM}/components",
+        {
+            "name":        "testapp-db",
+            "providerId":  "mysql-db-provider",
+            "providerType": "org.keycloak.storage.UserStorageProvider",
+            "parentId":    REALM,
+            "config": {
+                "db_host":      [MYSQL_HOST],
+                "db_port":      [MYSQL_PORT],
+                "db_name":      [MYSQL_DB],
+                "db_user":      [MYSQL_USER],
+                "db_pass":      [MYSQL_PASS],
+                "table_name":   ["users"],
+                "username_col": ["username"],
+                "password_col": ["password_hash"],
+                "role_col":     ["role"],
+                "cachePolicy":  ["DEFAULT"],
+            },
+        },
+        token=ADMIN)
+    if code == 201:
+        print("   ✓ MySQL SPI component registered")
+    else:
+        print(f"   ERROR: SPI registration returned HTTP {code}")
+        print("   Make sure the SPI JAR is built: cd keycloak-db-spi && mvn clean package")
+        sys.exit(1)
+
+
+# ── 5. Create protocol mappers ────────────────────────────────────────────────
+step(5, "Creating protocol mappers (role, db_user_id)...")
+
+MAPPERS_TO_CREATE = [
+    {
+        "name":            "ztam-role",
+        "protocol":        "openid-connect",
+        "protocolMapper":  "oidc-usermodel-attribute-mapper",
+        "consentRequired": False,
+        "config": {
+            "user.attribute":      "role",
+            "claim.name":          "role",
+            "jsonType.label":      "String",
+            "id.token.claim":      "true",
+            "access.token.claim":  "true",
+            "userinfo.token.claim":"true",
+            "aggregate.attrs":     "false",
+            "multivalued":         "false",
+        },
+    },
+    {
+        "name":            "ztam-db-user-id",
+        "protocol":        "openid-connect",
+        "protocolMapper":  "oidc-usermodel-attribute-mapper",
+        "consentRequired": False,
+        "config": {
+            "user.attribute":      "db_user_id",
+            "claim.name":          "db_user_id",
+            "jsonType.label":      "String",
+            "id.token.claim":      "true",
+            "access.token.claim":  "true",
+            "userinfo.token.claim":"true",
+            "aggregate.attrs":     "false",
+            "multivalued":         "false",
+        },
+    },
+]
+
+code, existing_mappers = kc("GET",
+    f"/admin/realms/{REALM}/clients/{CLIENT_UUID}/protocol-mappers/models",
+    token=ADMIN)
+existing_names = {m["name"] for m in (existing_mappers if isinstance(existing_mappers, list) else [])}
+
+for mapper in MAPPERS_TO_CREATE:
+    if mapper["name"] in existing_names:
+        print(f"   ✓ Mapper '{mapper['name']}' already exists — skipping")
+        continue
+    code, _ = kc("POST",
+        f"/admin/realms/{REALM}/clients/{CLIENT_UUID}/protocol-mappers/models",
+        mapper, token=ADMIN)
+    if code == 201:
+        print(f"   ✓ Mapper '{mapper['name']}' created")
+    else:
+        print(f"   WARNING: mapper '{mapper['name']}' creation returned HTTP {code}")
+
+
+# ── 6. Delete native Keycloak users (force SPI to serve them) ─────────────────
+step(6, "Removing any native Keycloak users (forces SPI federation)...")
+code, users = kc("GET", f"/admin/realms/{REALM}/users?max=100", token=ADMIN)
 deleted = []
 for u in (users if isinstance(users, list) else []):
     if not u.get("federationLink"):
-        code, _ = kc("DELETE", f"/admin/realms/{REALM}/users/{u['id']}", token=ADMIN)
-        deleted.append((u["username"], code))
+        c, _ = kc("DELETE", f"/admin/realms/{REALM}/users/{u['id']}", token=ADMIN)
+        deleted.append((u.get("username", "?"), c))
+if deleted:
+    for name, c in deleted:
+        print(f"   Deleted native user '{name}' → HTTP {c}")
+else:
+    print("   ✓ No native users found (already clean)")
 
-print("=== Deleted native Keycloak users ===")
-for name, code in deleted:
-    print(f"  {name} -> HTTP {code}")
-if not deleted:
-    print("  None (already clean)")
 
-# --- 3. Login alice via Keycloak (SPI reads from testapp-db) ---
-_, resp = kc("POST", f"/realms/{REALM}/protocol/openid-connect/token", {
-    "grant_type": "password", "client_id": "test-app",
+# ── 7. Smoke-test: login as alice ─────────────────────────────────────────────
+step(7, "Smoke test — login alice via Keycloak + SPI + testapp-db...")
+code, resp = kc("POST", f"/realms/{REALM}/protocol/openid-connect/token", {
+    "grant_type": "password",
+    "client_id":  KC_CLIENT_ID,
     "client_secret": KC_CLIENT_SECRET,
-    "username": "alice", "password": "secret123"
+    "username": "alice",
+    "password": "secret123",
 }, form=True)
 
-print("\n=== LOGIN alice via Keycloak+SPI+testapp-db ===")
 if "access_token" in resp:
     tok = resp["access_token"]
     raw = tok.split(".")[1]
     padding = (4 - len(raw) % 4) % 4
     payload = json.loads(base64.urlsafe_b64decode(raw + "=" * padding))
-    print(f"  Status:   SUCCESS")
-    print(f"  Username: {payload.get('preferred_username')}")
-    print(f"  Issuer:   {payload.get('iss')}")
-    print(f"  Role:     {payload.get('role', '(role claim not yet in token)')}")
-    print(f"  Alg:      RS256 - Keycloak signed")
-    print(f"  Token[:60]: {tok[:60]}...")
-    KC_TOKEN = tok
+    print(f"   ✓ Login SUCCESS")
+    print(f"     preferred_username : {payload.get('preferred_username')}")
+    print(f"     role               : {payload.get('role', '(missing — check SPI + mapper)')}")
+    print(f"     db_user_id         : {payload.get('db_user_id', '(missing)')}")
+    print(f"     iss                : {payload.get('iss')}")
+    print(f"     alg                : RS256 (Keycloak-signed)")
+    if not payload.get("role"):
+        print("   WARNING: 'role' claim missing. Verify protocol mapper + SPI registration.")
 else:
-    print(f"  ERROR: {resp}")
-    KC_TOKEN = None
+    print(f"   ERROR: login failed (HTTP {code}): {resp}")
+    print("   Possible causes:")
+    print("   - testapp-db not yet initialized (wait 10s, retry)")
+    print("   - SPI JAR not built: cd keycloak-db-spi && mvn clean package -DskipTests")
+    print("   - Wrong KC_CLIENT_SECRET in .env")
 
-# --- 4. Show who's now in Keycloak (should be federation/SPI users) ---
-_, users_after = kc("GET", f"/admin/realms/{REALM}/users?max=50", token=ADMIN)
-print("\n=== Keycloak users after SPI login ===")
-for u in (users_after if isinstance(users_after, list) else []):
-    src = "FEDERATION(SPI->testapp-db)" if u.get("federationLink") else "NATIVE"
-    print(f"  {u.get('username'):15} {src}")
-
-print("\n=== Token sources comparison ===")
-print("  TestApp JWT:  alg=HS256, iss=(none), signed by app's JWT_SECRET")
-print("  Keycloak JWT: alg=RS256, iss=http://localhost:8080/realms/test-tenant")
-print("\n=== FLOW ===")
-print("  1. User enters username+password")
-print("  2. Keycloak SPI queries: SELECT * FROM taskapp.users WHERE username=?")
-print("  3. SPI reads password_hash, verifies bcrypt")
-print("  4. Keycloak issues RS256 JWT (NEVER writes to testapp-db)")
-print("  5. Every request goes through Envoy -> auth-middleware -> OPA")
-print("  6. app on port 3000 receives request only if OPA says allow=true")
+# ── 8. Summary ────────────────────────────────────────────────────────────────
+print("\n" + "═" * 60)
+print("  ZTAM Keycloak setup complete")
+print("═" * 60)
+print(f"  Realm            : {REALM}")
+print(f"  Client           : {KC_CLIENT_ID}")
+print(f"  User federation  : MySQL SPI → {MYSQL_HOST}:{MYSQL_PORT}/{MYSQL_DB}")
+print(f"  Protocol mappers : role, db_user_id")
+print(f"  Admin console    : http://localhost:8080")
+print()
+print("  Test users (in testapp-db):")
+print("    alice      / secret123 → admin")
+print("    charlie    / pass123   → user")
+print("    testuser   / test123   → user")
+print("    demouser   / demo123   → admin")
+print()
+print("  Open the app:  https://localhost")
+print("═" * 60)

@@ -11,8 +11,23 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // ── Middleware ────────────────────────────────────────────────────────────────
-app.use(cors());
-app.use(express.json());
+// Restrict CORS to same-origin: testapp sits behind Envoy, so all legitimate
+// browser traffic arrives from the same host (no cross-origin requests needed).
+// The wildcard cors() was replaced with an explicit same-origin policy.
+app.use(
+  cors({
+    origin: false, // same-origin only; Envoy's ext_authz handles all upstream auth
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: [
+      "Content-Type",
+      "Authorization",
+      "X-User-Id",
+      "X-User-Roles",
+      "X-Tenant-Id",
+    ],
+  }),
+);
+app.use(express.json({ limit: "100kb" })); // prevent oversized JSON payloads
 
 // Serve frontend static files from ../frontend
 app.use(express.static(path.join(__dirname, "..", "frontend")));

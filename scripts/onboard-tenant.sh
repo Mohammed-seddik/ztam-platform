@@ -75,7 +75,9 @@ set +o allexport
 KC_URL="${KEYCLOAK_URL:-http://localhost:8080}"
 KC_REALM="${KC_REALM:-test-tenant}"
 KC_ADMIN_USER="${KC_ADMIN_USER:-admin}"
-KC_ADMIN_PASSWORD="${KC_ADMIN_PASSWORD:?KC_ADMIN_PASSWORD not set in .env}"
+# Support both KC_ADMIN_PASS (from .env.example) and KC_ADMIN_PASSWORD (legacy alias)
+KC_ADMIN_PASSWORD="${KC_ADMIN_PASS:-${KC_ADMIN_PASSWORD:-}}"
+[[ -z "$KC_ADMIN_PASSWORD" ]] && { echo "ERROR: KC_ADMIN_PASS not set in .env"; exit 1; }
 
 # ── Step 1: Keycloak admin token ──────────────────────────────────────────────
 echo "[1/5] Authenticating with Keycloak..."

@@ -25,13 +25,13 @@
     h1 { font-size: 1.6rem; color: #0f3460; margin-bottom: 6px; }
     p.sub { font-size: .85rem; color: #666; margin-bottom: 24px; }
     label { display: block; font-size: .85rem; font-weight: 600; color: #333; margin-bottom: 4px; }
-    input, select {
+    input {
       width: 100%; padding: 10px 12px;
       border: 1.5px solid #d0d0d0; border-radius: 8px;
       font-size: .95rem; outline: none; transition: border .2s;
       margin-bottom: 16px; background: #fff;
     }
-    input:focus, select:focus { border-color: #0f3460; }
+    input:focus { border-color: #0f3460; }
     button {
       width: 100%; padding: 11px;
       background: #0f3460; color: #fff;
@@ -58,13 +58,7 @@
     <input id="username" type="text" placeholder="Choose a username" required autocomplete="username"/>
 
     <label for="password">Password</label>
-    <input id="password" type="password" placeholder="Min 6 characters" required autocomplete="new-password"/>
-
-    <label for="role">Role</label>
-    <select id="role">
-      <option value="user" selected>User</option>
-      <option value="admin">Admin</option>
-    </select>
+    <input id="password" type="password" placeholder="Min 8 characters" required autocomplete="new-password"/>
 
     <button type="submit">Create Account</button>
   </form>
@@ -87,10 +81,10 @@
 
     const username = document.getElementById('username').value.trim();
     const password = document.getElementById('password').value;
-    const role     = document.getElementById('role').value;
+    const role     = 'user'; // always assigned server-side; cannot be user-selected
 
-    if (password.length < 6) {
-      msg.textContent = 'Password must be at least 6 characters.';
+    if (password.length < 8) {
+      msg.textContent = 'Password must be at least 8 characters.';
       msg.className   = 'msg err';
       return;
     }

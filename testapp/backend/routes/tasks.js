@@ -38,8 +38,13 @@ router.get("/", async (req, res) => {
 router.post("/", async (req, res) => {
   const { title } = req.body;
 
-  if (!title || !title.trim()) {
+  if (!title || typeof title !== "string" || !title.trim()) {
     return res.status(400).json({ error: "title is required." });
+  }
+  if (title.trim().length > 200) {
+    return res
+      .status(400)
+      .json({ error: "title must be 200 characters or fewer." });
   }
 
   try {

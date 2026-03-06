@@ -9,6 +9,9 @@ envoy/certs/*.pem
 # Java build output
 *.jar
 target/
+target-*/
+build-verify/
+*.class
 
 # Python
 __pycache__/

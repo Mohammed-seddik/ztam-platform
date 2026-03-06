@@ -38,6 +38,7 @@ Browser ─ HTTP  :80  ───►│  │  TLS termination  │◄────
 **Role:** Policy Enforcement Point (PEP). Every byte of traffic goes through Envoy.
 
 **Key responsibilities:**
+
 - Listens on port 80 — returns HTTP 301 redirect to HTTPS
 - Listens on port 443 (TLS 1.2/1.3, ECDHE ciphers only, cert in `envoy/certs/`)
 - Enforces `ext_authz` — pauses each request and asks auth-middleware for a decision
@@ -49,15 +50,15 @@ Browser ─ HTTP  :80  ───►│  │  TLS termination  │◄────
 
 **Route table (in priority order):**
 
-| Match | Destination | ext_authz |
-|---|---|---|
-| `GET /` | TestApp | **disabled** (serve login page freely) |
-| `GET /login.html` | TestApp | **disabled** |
-| `GET /dashboard.html` | TestApp | **disabled** |
-| `GET /register.html` | TestApp | **disabled** |
-| `POST /api/auth/login` | Auth Middleware (`/login-proxy`) | **disabled** |
-| `POST /api/auth/register` | TestApp | **disabled** |
-| Everything else | TestApp | **ENABLED** ← enforced |
+| Match                     | Destination                      | ext_authz                              |
+| ------------------------- | -------------------------------- | -------------------------------------- |
+| `GET /`                   | TestApp                          | **disabled** (serve login page freely) |
+| `GET /login.html`         | TestApp                          | **disabled**                           |
+| `GET /dashboard.html`     | TestApp                          | **disabled**                           |
+| `GET /register.html`      | TestApp                          | **disabled**                           |
+| `POST /api/auth/login`    | Auth Middleware (`/login-proxy`) | **disabled**                           |
+| `POST /api/auth/register` | TestApp                          | **disabled**                           |
+| Everything else           | TestApp                          | **ENABLED** ← enforced                 |
 
 ---
 
@@ -68,6 +69,7 @@ Browser ─ HTTP  :80  ───►│  │  TLS termination  │◄────
 **Two endpoints:**
 
 #### `POST /login-proxy`
+
 Called by Envoy for `POST /api/auth/login`. Does NOT validate a token — it IS the login.
 
 ```
@@ -86,6 +88,7 @@ The token returned is the **Keycloak RS256 token** — not HS256 — so that all
 calls can be validated against Keycloak's JWKS.
 
 #### `/{full_path}` (catch-all — ext_authz handler)
+
 Called by Envoy for every other request. Validates the incoming token and decides allow/deny.
 
 ```
@@ -105,11 +108,12 @@ Called by Envoy for every other request. Validates the incoming token and decide
 
 ---
 
-### 3. Keycloak (`keycloak:26.3`)
+### 3. Keycloak (`keycloak:26.5.5`)
 
 **Role:** Identity Provider. Issues and signs RS256 JWTs.
 
 **Configuration for this demo:**
+
 - Realm: `test-tenant`
 - Client: `test-app` (confidential, client-secret: `test-app-secret-2024`)
 - User Federation: MySQL DB Provider (the custom Java SPI)
@@ -127,23 +131,34 @@ Keycloak's own database is PostgreSQL (`postgres` container, internal only).
 
 **Three classes:**
 
-| Class | Role |
-|---|---|
-| `MySqlUserStorageProviderFactory` | Registers the provider, defines config UI fields in Keycloak Admin |
-| `MySqlUserStorageProvider` | Executes SQL queries, verifies passwords, returns UserModel |
-| `MySqlUserAdapter` | Wraps a result row as a Keycloak `UserModel`, exposes `role` and `db_user_id` as attributes |
+| Class                             | Role                                                                                        |
+| --------------------------------- | ------------------------------------------------------------------------------------------- |
+| `MySqlUserStorageProviderFactory` | Registers the provider, defines config UI fields in Keycloak Admin                          |
+| `MySqlUserStorageProvider`        | Executes SQL queries, verifies passwords, returns UserModel                                 |
+| `MySqlUserAdapter`                | Wraps a result row as a Keycloak `UserModel`, exposes `role` and `db_user_id` as attributes |
 
-**SQL used:**
+**SQL used (column names are configurable in the Keycloak Admin UI):**
+
 ```sql
-SELECT id, username, password_col, role_col FROM users WHERE username = ?
+-- User lookup:
+SELECT `id`, `username`, `role` FROM `users` WHERE `username` = ? LIMIT 1
+
+-- Password hash fetch (separate query during credential validation):
+SELECT `password_hash` FROM `users` WHERE `username` = ? LIMIT 1
 ```
 
+> Default column-name settings in the SPI Admin UI differ from the demo schema.
+> `setup_demo.py` explicitly passes `username_col=username`, `password_col=password_hash`,
+> `role_col=role` when registering the SPI component so the defaults don't matter for the demo.
+
 **Password verification:**
+
 - Reads bcrypt hash from `password_col`
 - Normalizes `$2b$` prefix to `$2a$` (Node.js generates `$2b$`, Java's jBCrypt expects `$2a$`)
 - Calls `BCrypt.checkpw(plaintext, normalizedHash)`
 
 **Attributes exposed to Keycloak:**
+
 - `role` — the value of `role_col` (e.g. `admin`, `user`)
 - `db_user_id` — the integer primary key from the `id` column
 
@@ -156,6 +171,7 @@ These become JWT claims via the protocol mappers configured in `setup_demo.py`.
 **Role:** Policy Decision Point. Evaluates rules against `{ user, request, device }`.
 
 **Input shape:**
+
 ```json
 {
   "input": {
@@ -179,6 +195,7 @@ These become JWT claims via the protocol mappers configured in `setup_demo.py`.
 ```
 
 **Decision logic (`authz.rego`):**
+
 ```
 allow = true  iff  role_permitted AND device_ok
 
@@ -202,10 +219,12 @@ device_ok:
 **Role:** The demo application being protected. Node.js task manager with MySQL backend.
 
 **It was never modified.** Its original code:
+
 - Expects `Authorization: Bearer <HS256 token>` signed with `JWT_SECRET`
 - Uses `user_id` (integer FK) in the tasks table
 
 ZTAM handles both requirements transparently:
+
 - Token translation: auth-middleware mints HS256 with TestApp's `JWT_SECRET`
 - User ID: the `db_user_id` claim from the SPI is used as the `sub` in the HS256 token
 
@@ -335,23 +354,23 @@ TestApp receives exactly what it would receive if you called it directly — it 
 
 ### `auth-middleware`
 
-| Variable | Description |
-|---|---|
-| `KEYCLOAK_URL` | Keycloak base URL (internal Docker) |
-| `KC_REALM` | Realm name |
-| `KC_CLIENT_ID` | Keycloak client ID |
-| `KC_CLIENT_SECRET` | Client secret — **required, no default** |
-| `OPA_URL` | OPA base URL |
+| Variable             | Description                                               |
+| -------------------- | --------------------------------------------------------- |
+| `KEYCLOAK_URL`       | Keycloak base URL (internal Docker)                       |
+| `KC_REALM`           | Realm name                                                |
+| `KC_CLIENT_ID`       | Keycloak client ID                                        |
+| `KC_CLIENT_SECRET`   | Client secret — **required, no default**                  |
+| `OPA_URL`            | OPA base URL                                              |
 | `TESTAPP_JWT_SECRET` | TestApp's HS256 signing secret — **required, no default** |
 
 > auth-middleware will **refuse to start** if `KC_CLIENT_SECRET` or `TESTAPP_JWT_SECRET` are empty.
 
 ### `testapp`
 
-| Variable | Description |
-|---|---|
-| `DB_HOST` | MySQL host (`testapp-db`) |
-| `DB_NAME` | Database name (`taskapp`) |
+| Variable     | Description                           |
+| ------------ | ------------------------------------- |
+| `DB_HOST`    | MySQL host (`testapp-db`)             |
+| `DB_NAME`    | Database name (`taskapp`)             |
 | `JWT_SECRET` | Must match `TESTAPP_JWT_SECRET` above |
 
 ---
