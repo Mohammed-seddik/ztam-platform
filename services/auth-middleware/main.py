@@ -28,10 +28,14 @@ KC_CLIENT_ID: str = os.getenv("KC_CLIENT_ID", "test-app")
 KC_CLIENT_SECRET: str = os.getenv("KC_CLIENT_SECRET", "")
 OPA_URL: str = os.getenv("OPA_URL", "http://opa:8181")
 TESTAPP_JWT_SECRET: Optional[str] = os.getenv("TESTAPP_JWT_SECRET")
+# KC_ISSUER_URL: the public-facing URL Keycloak uses in the `iss` claim.
+# Typically differs from KEYCLOAK_URL (internal Docker hostname) when
+# Keycloak is configured with KC_HOSTNAME pointing to the public host.
+KC_ISSUER_URL: str = os.getenv("KC_ISSUER_URL", KEYCLOAK_URL)
 
 JWKS_URI: str = f"{KEYCLOAK_URL}/realms/{KC_REALM}/protocol/openid-connect/certs"
 KC_TOKEN_URI: str = f"{KEYCLOAK_URL}/realms/{KC_REALM}/protocol/openid-connect/token"
-EXPECTED_ISSUER: str = f"{KEYCLOAK_URL}/realms/{KC_REALM}"
+EXPECTED_ISSUER: str = f"{KC_ISSUER_URL}/realms/{KC_REALM}"
 
 # ─── JWKS in-memory cache with asyncio lock (prevents thundering herd) ───────
 _jwks_cache: dict = {}
@@ -265,17 +269,28 @@ async def check(request: Request, full_path: str = ""):
             media_type="application/json",
         )
 
-    # ---------- 4 & 5. Validate RS256 JWT (signature + expiry + aud + iss) --
+    # ---------- 4 & 5. Validate RS256 JWT (signature + expiry + iss) ---------
+    # Note: Keycloak access tokens carry aud="account", not the client ID.
+    # We skip aud validation and instead check azp (authorized party) below.
     try:
         claims: dict = jwt.decode(
             token,
             jwks,
             algorithms=["RS256"],
-            audience=KC_CLIENT_ID,   # validates aud == KC_CLIENT_ID
-            issuer=EXPECTED_ISSUER,  # validates iss == http://keycloak:8080/realms/{realm}
+            options={"verify_aud": False},
+            issuer=EXPECTED_ISSUER,
         )
     except JWTError as exc:
         logger.warning("JWT validation failed: %s", exc)
+        return Response(
+            content='{"error":"invalid or expired token"}',
+            status_code=403,
+            media_type="application/json",
+        )
+
+    # Verify the token was issued for our client (azp = authorized party)
+    if claims.get("azp") != KC_CLIENT_ID:
+        logger.warning("JWT rejected: azp=%s expected=%s", claims.get("azp"), KC_CLIENT_ID)
         return Response(
             content='{"error":"invalid or expired token"}',
             status_code=403,

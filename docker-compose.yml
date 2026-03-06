@@ -66,6 +66,9 @@ services:
     build: ./services/auth-middleware
     environment:
       KEYCLOAK_URL: http://keycloak:8080
+      # KC_ISSUER_URL: the public-facing URL Keycloak stamps in JWT iss claims.
+      # Must match KC_HOSTNAME in the keycloak service (defaults to localhost).
+      KC_ISSUER_URL: http://localhost:8080
       KC_REALM: ${KC_REALM}
       KC_CLIENT_ID: ${KC_CLIENT_ID:-test-app}
       KC_CLIENT_SECRET: ${KC_CLIENT_SECRET}
