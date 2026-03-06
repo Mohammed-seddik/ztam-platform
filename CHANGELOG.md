@@ -2,6 +2,23 @@
 
 All notable changes to the ZTAM Platform are documented in this file.
 
+---
+
+## [v4.0.0] — Multi-Tenant Dynamic Onboarding
+
+### Added
+- **`scripts/onboard-tenant.sh`** — one command onboards any external app (Railway, Heroku, Render, VPS, Docker): creates Keycloak client + roles, adds OPA permissions, configures Envoy routing, reloads automatically
+- **`policies/tenants.json`** — central per-tenant permissions file, hot-reloaded by OPA (< 1s, no restart)
+- **`scripts/opa_add_tenant.py`** — adds a tenant entry to `tenants.json` with sensible role defaults
+- **`scripts/envoy_add_tenant.py`** — inserts Envoy virtual host + cluster using sentinel markers. Idempotent
+- **`tenants/`** directory — per-tenant `config.json` metadata + `_template/` for manual onboarding
+- **`INTEGRATION_GUIDE.md`** — sales pitch, 6 integration cases, live demo playbook, pricing tiers
+
+### Changed
+- `policies/authz.rego` — tenant-aware `_resolve_perms()`: checks `tenants.json[tenant_id]` first, falls back to global `permissions.json`. Uses `object.get()` for safe missing-key handling
+- `policies/authz_test.rego` — 14 → 16 tests (added 2 multi-tenant tests); all pass
+- `envoy/envoy.yaml` — sentinel markers (`__ZTAM_TENANT_ROUTES__`, `__ZTAM_TENANT_CLUSTERS__`) for automated multi-tenant insertion
+
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
