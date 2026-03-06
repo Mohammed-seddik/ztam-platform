@@ -731,3 +731,31 @@
   "message": "No known CVEs that need to be fixed are found for the given dependencies."
 }}).
 2026-03-06T17:26:14.321Z [INFO] ----------------------invoked validate_cves_for_java----------------------
+2026-03-06T17:28:34.440Z [INFO] ---------------------prepare report_event----------------------
+2026-03-06T17:28:34.440Z [INFO] [Tool.prepareInvocation]({name: report_event, input: {
+  "event": "summaryGenerated",
+  "message": "Java 17 → 21 upgrade completed successfully. All goals achieved with zero CVEs and successful compilation.",
+  "phase": "summarize",
+  "projectPath": "/home/mohammed-seddik/PFE Folder/ztam-platform/keycloak-db-spi",
+  "sessionId": "20260306161630",
+  "status": "succeeded"
+}}).
+2026-03-06T17:28:34.440Z [INFO] [Tool.prepareInvocation] do prepare invocation.
+2026-03-06T17:28:34.440Z [INFO] [Tool.prepareInvocation]({result: {
+  "invocationMessage": "Report upgrade event"
+}}).
+2026-03-06T17:28:34.440Z [INFO] ----------------------prepared report_event----------------------
+2026-03-06T17:28:34.939Z [INFO] ----------------------invoke report_event----------------------
+2026-03-06T17:28:34.939Z [INFO] [Tool.invoke]({name: report_event, input: {
+  "event": "summaryGenerated",
+  "message": "Java 17 → 21 upgrade completed successfully. All goals achieved with zero CVEs and successful compilation.",
+  "phase": "summarize",
+  "projectPath": "/home/mohammed-seddik/PFE Folder/ztam-platform/keycloak-db-spi",
+  "sessionId": "20260306161630",
+  "status": "succeeded"
+}}).
+2026-03-06T17:28:34.939Z [INFO] [Tool.invoke] do invoke.
+2026-03-06T17:28:34.963Z [INFO] [Tool.invoke]({result: {
+  "message": "Event 'summaryGenerated' reported!\nSession ID: 20260306161630,\nSession Dir: /home/mohammed-seddik/PFE Folder/ztam-platform/keycloak-db-spi/.github/java-upgrade/20260306161630"
+}}).
+2026-03-06T17:28:34.963Z [INFO] ----------------------invoked report_event----------------------
