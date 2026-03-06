@@ -7,27 +7,26 @@ This document explains every component, how they connect, and the exact flow of 
 ## High-Level Overview
 
 ```
-                        ┌─────────────────────────────────────────────────────────┐
-                        │                  Docker Network: ztam                   │
-                        │                                                         │
-                        │  ┌──────────┐   ext_authz   ┌──────────────────────┐   │
-Browser ─── port 80 ───►│  │  Envoy   │──────────────►│  Auth Middleware      │   │
-                        │  │  v1.28   │               │  FastAPI :8001        │   │
-                        │  │          │◄──────────────│                      │   │
-                        │  └────┬─────┘  200/401/403  │  1. Validate RS256   │   │
-                        │       │ (on allow)           │  2. Call OPA         │   │
-                        │       │ forward + HS256 token│  3. Translate token  │   │
-                        │       ▼                      └──────┬───────────────┘   │
-                        │  ┌──────────┐                       │                   │
-                        │  │ TestApp  │               ┌───────┴──────┐            │
-                        │  │ Node.js  │               │  Keycloak    │            │
-                        │  │ :3000    │               │  :8080       │            │
-                        │  └──────────┘               │  (SPI ──────►│MySQL :3306)│
-                        │                             └──────────────┘            │
-                        │                             ┌──────────────┐            │
-                        │                             │  OPA :8181   │            │
-                        │                             └──────────────┘            │
-                        └─────────────────────────────────────────────────────────┘
+                         ┌──────────────────────────────────────────────────────────┐
+                         │                   Docker Network: ztam                   │
+                         │                                                          │
+                         │  ┌───────────────────┐  ext_authz  ┌──────────────────┐ │
+Browser ─ HTTPS :443 ───►│  │  Envoy  v1.28     │────────────►│ Auth Middleware  │ │
+Browser ─ HTTP  :80  ───►│  │  TLS termination  │◄────────────│ FastAPI (intern) │ │
+  (→ 301 to HTTPS)       │  │  security headers │ 200/401/403 │                  │ │
+                         │  └────────┬──────────┘             │ 1. Validate RS256│ │
+                         │           │ (on allow)              │ 2. Rate limit IP │ │
+                         │           │ forward + HS256 token   │ 3. Call OPA      │ │
+                         │           ▼                         │ 4. Mint HS256    │ │
+                         │  ┌──────────────┐           ┌───────┴────────┐         │ │
+                         │  │   TestApp    │           │   Keycloak     │         │ │
+                         │  │   Node.js    │           │   :8080 (admin)│         │ │
+                         │  │  (internal)  │           │  SPI ─────────►│MySQL)   │ │
+                         │  └──────────────┘           └───────┬────────┘         │ │
+                         │                             ┌───────┴────────┐         │ │
+                         │                             │  OPA (internal)│         │ │
+                         │                             └────────────────┘         │ │
+                         └──────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -39,10 +38,14 @@ Browser ─── port 80 ───►│  │  Envoy   │───────
 **Role:** Policy Enforcement Point (PEP). Every byte of traffic goes through Envoy.
 
 **Key responsibilities:**
-- Listens on port 80 (mapped from internal 8080)
-- Routes requests to either `auth_middleware_cluster` or `backend_cluster`
+- Listens on port 80 — returns HTTP 301 redirect to HTTPS
+- Listens on port 443 (TLS 1.2/1.3, ECDHE ciphers only, cert in `envoy/certs/`)
 - Enforces `ext_authz` — pauses each request and asks auth-middleware for a decision
+- Adds security response headers on every HTTPS response:
+  - `Strict-Transport-Security`, `Content-Security-Policy`, `X-Content-Type-Options`,
+    `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`, `Cache-Control: no-store`
 - Injects headers returned by auth-middleware into forwarded requests
+- **`failure_mode_allow: false`** — if auth-middleware is unreachable, all requests are denied
 
 **Route table (in priority order):**
 
@@ -55,8 +58,6 @@ Browser ─── port 80 ───►│  │  Envoy   │───────
 | `POST /api/auth/login` | Auth Middleware (`/login-proxy`) | **disabled** |
 | `POST /api/auth/register` | TestApp | **disabled** |
 | Everything else | TestApp | **ENABLED** ← enforced |
-
-**`failure_mode_allow: false`** — if auth-middleware is unreachable, all requests are denied.
 
 ---
 
@@ -72,11 +73,13 @@ Called by Envoy for `POST /api/auth/login`. Does NOT validate a token — it IS 
 ```
 Request body: { "username": "alice", "password": "secret123" }
 
-1. Calls Keycloak token endpoint with grant_type=password
-2. Keycloak → SPI → MySQL → bcrypt verify
-3. Keycloak returns RS256 JWT
-4. Extracts claims: preferred_username, role, db_user_id
-5. Returns: { "token": "<KC RS256 token>", "username": "alice", "role": "admin" }
+0. Reject if IP has exceeded 10 attempts in 60 s  → 429
+1. Reject if username > 200 chars or password > 1000 chars  → 400
+2. Calls Keycloak token endpoint with grant_type=password
+3. Keycloak → SPI → MySQL → bcrypt verify
+4. Keycloak returns RS256 JWT
+5. Extracts claims: preferred_username, role, db_user_id
+6. Returns: { "token": "<KC RS256 token>", "username": "alice", "role": "admin" }
 ```
 
 The token returned is the **Keycloak RS256 token** — not HS256 — so that all subsequent API
@@ -332,14 +335,16 @@ TestApp receives exactly what it would receive if you called it directly — it 
 
 ### `auth-middleware`
 
-| Variable | Description | Default |
-|---|---|---|
-| `KEYCLOAK_URL` | Keycloak base URL (internal Docker) | `http://keycloak:8080` |
-| `KC_REALM` | Realm name | `test-tenant` |
-| `KC_CLIENT_ID` | Keycloak client ID | `test-app` |
-| `KC_CLIENT_SECRET` | Client secret (from Keycloak Admin) | `test-app-secret-2024` |
-| `OPA_URL` | OPA base URL | `http://opa:8181` |
-| `TESTAPP_JWT_SECRET` | TestApp's HS256 signing secret | `super_secret_jwt_key_for_ztam_demo_2024` |
+| Variable | Description |
+|---|---|
+| `KEYCLOAK_URL` | Keycloak base URL (internal Docker) |
+| `KC_REALM` | Realm name |
+| `KC_CLIENT_ID` | Keycloak client ID |
+| `KC_CLIENT_SECRET` | Client secret — **required, no default** |
+| `OPA_URL` | OPA base URL |
+| `TESTAPP_JWT_SECRET` | TestApp's HS256 signing secret — **required, no default** |
+
+> auth-middleware will **refuse to start** if `KC_CLIENT_SECRET` or `TESTAPP_JWT_SECRET` are empty.
 
 ### `testapp`
 
