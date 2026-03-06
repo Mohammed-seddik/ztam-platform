@@ -1,0 +1,220 @@
+2026-03-06T16:16:30.718Z [INFO] ----------------------invoke report_event----------------------
+2026-03-06T16:16:30.718Z [INFO] [Tool.invoke]({name: report_event, input: {
+  "projectPath": "/home/mohammed-seddik/PFE Folder/ztam-platform/keycloak-db-spi",
+  "event": "precheckCompleted",
+  "phase": "precheck",
+  "status": "succeeded"
+}}).
+2026-03-06T16:16:30.718Z [INFO] [Tool.invoke] do invoke.
+2026-03-06T16:16:30.724Z [INFO] [Tool.invoke]({result: {
+  "message": "Event 'precheckCompleted' reported!\nSession ID: 20260306161630,\nSession Dir: /home/mohammed-seddik/PFE Folder/ztam-platform/keycloak-db-spi/.github/java-upgrade/20260306161630"
+}}).
+2026-03-06T16:16:30.724Z [INFO] ----------------------invoked report_event----------------------
+2026-03-06T16:17:39.706Z [INFO] ---------------------prepare list_jdks----------------------
+2026-03-06T16:17:39.706Z [INFO] [Tool.prepareInvocation]({name: list_jdks, input: {
+  "sessionId": "20260306161630"
+}}).
+2026-03-06T16:17:39.707Z [INFO] [Tool.prepareInvocation] do prepare invocation.
+2026-03-06T16:17:39.707Z [INFO] [Tool.prepareInvocation]({result: {
+  "invocationMessage": "List jdks"
+}}).
+2026-03-06T16:17:39.707Z [INFO] ----------------------prepared list_jdks----------------------
+2026-03-06T16:17:39.756Z [INFO] ----------------------invoke list_jdks----------------------
+2026-03-06T16:17:39.756Z [INFO] [Tool.invoke]({name: list_jdks, input: {
+  "sessionId": "20260306161630"
+}}).
+2026-03-06T16:17:39.756Z [INFO] [Tool.invoke] do invoke.
+2026-03-06T16:17:39.768Z [INFO] [Tool.invoke]({result: {
+  "message": "We found following jdks in your system:\n\n1. Java 17.0.18\n   📁 Path: /usr/lib/jvm/java-17-openjdk-amd64/bin\n   🏷️ Source: others\n\n2. Java 17.0.18\n   📁 Path: /usr/lib/jvm/java-1.17.0-openjdk-amd64/bin\n   🏷️ Source: others\n\n3. Java 21.0.10\n   📁 Path: /usr/lib/jvm/java-21-openjdk-amd64/bin\n   🏷️ Source: PATH\n\n4. Java 21.0.10\n   📁 Path: /usr/lib/jvm/java-1.21.0-openjdk-amd64/bin\n   🏷️ Source: others\n\nTotal: 4 JDK installation(s) found"
+}}).
+2026-03-06T16:17:39.768Z [INFO] ----------------------invoked list_jdks----------------------
+2026-03-06T16:17:39.783Z [INFO] ---------------------prepare list_mavens----------------------
+2026-03-06T16:17:39.783Z [INFO] [Tool.prepareInvocation]({name: list_mavens, input: {
+  "includeVersion": true,
+  "sessionId": "20260306161630"
+}}).
+2026-03-06T16:17:39.783Z [INFO] [Tool.prepareInvocation] do prepare invocation.
+2026-03-06T16:17:39.783Z [INFO] [Tool.prepareInvocation]({result: {
+  "invocationMessage": "List mavens"
+}}).
+2026-03-06T16:17:39.783Z [INFO] ----------------------prepared list_mavens----------------------
+2026-03-06T16:17:39.842Z [INFO] ----------------------invoke list_mavens----------------------
+2026-03-06T16:17:39.842Z [INFO] [Tool.invoke]({name: list_mavens, input: {
+  "includeVersion": true,
+  "sessionId": "20260306161630"
+}}).
+2026-03-06T16:17:39.842Z [INFO] [Tool.invoke] do invoke.
+2026-03-06T16:17:39.844Z [INFO] [Tool.invoke]({result: {
+  "message": "No Maven installations found."
+}}).
+2026-03-06T16:17:39.844Z [INFO] ----------------------invoked list_mavens----------------------
+2026-03-06T16:19:15.021Z [INFO] ---------------------prepare confirm_upgrade_plan----------------------
+2026-03-06T16:19:15.021Z [INFO] [Tool.prepareInvocation]({name: confirm_upgrade_plan, input: {
+  "sessionId": "20260306161630"
+}}).
+2026-03-06T16:19:15.021Z [INFO] [Tool.prepareInvocation] do prepare invocation.
+2026-03-06T16:19:15.021Z [INFO] [Tool.prepareInvocation]({result: {
+  "invocationMessage": "Review [upgrade plan](/home/mohammed-seddik/PFE Folder/ztam-platform/keycloak-db-spi/.github/java-upgrade/20260306161630/plan.md)",
+  "confirmationMessages": {
+    "title": "Plan generated",
+    "message": "Please review the generated plan and make any necessary adjustments before proceeding. You can modify the generated [`plan.md`](/home/mohammed-seddik/PFE Folder/ztam-platform/keycloak-db-spi/.github/java-upgrade/20260306161630/plan.md) directly."
+  }
+}}).
+2026-03-06T16:19:15.021Z [INFO] ----------------------prepared confirm_upgrade_plan----------------------
+2026-03-06T16:19:16.739Z [INFO] ----------------------invoke confirm_upgrade_plan----------------------
+2026-03-06T16:19:16.739Z [INFO] [Tool.invoke]({name: confirm_upgrade_plan, input: {
+  "sessionId": "20260306161630"
+}}).
+2026-03-06T16:19:16.739Z [INFO] [Tool.invoke] do invoke.
+2026-03-06T16:19:16.739Z [INFO] Upgrade plan confirmed successfully.
+2026-03-06T16:19:16.754Z [INFO] [Tool.invoke]({result: {
+  "message": "Generated plan is reviewed and confirmed by the user! the upgrade process will start now and be tracked in markdown file: /home/mohammed-seddik/PFE Folder/ztam-platform/keycloak-db-spi/.github/java-upgrade/20260306161630/progress.md."
+}}).
+2026-03-06T16:19:16.754Z [INFO] ----------------------invoked confirm_upgrade_plan----------------------
+2026-03-06T16:19:22.727Z [INFO] ---------------------prepare report_event----------------------
+2026-03-06T16:19:22.727Z [INFO] [Tool.prepareInvocation]({name: report_event, input: {
+  "event": "planConfirmed",
+  "phase": "plan",
+  "projectPath": "/home/mohammed-seddik/PFE Folder/ztam-platform/keycloak-db-spi",
+  "sessionId": "20260306161630",
+  "status": "succeeded"
+}}).
+2026-03-06T16:19:22.727Z [INFO] [Tool.prepareInvocation] do prepare invocation.
+2026-03-06T16:19:22.727Z [INFO] [Tool.prepareInvocation]({result: {
+  "invocationMessage": "Report upgrade event"
+}}).
+2026-03-06T16:19:22.727Z [INFO] ----------------------prepared report_event----------------------
+2026-03-06T16:19:22.771Z [INFO] ----------------------invoke report_event----------------------
+2026-03-06T16:19:22.771Z [INFO] [Tool.invoke]({name: report_event, input: {
+  "event": "planConfirmed",
+  "phase": "plan",
+  "projectPath": "/home/mohammed-seddik/PFE Folder/ztam-platform/keycloak-db-spi",
+  "sessionId": "20260306161630",
+  "status": "succeeded"
+}}).
+2026-03-06T16:19:22.771Z [INFO] [Tool.invoke] do invoke.
+2026-03-06T16:19:22.772Z [INFO] [Tool.invoke]({result: {
+  "message": "Event 'planConfirmed' reported!\nSession ID: 20260306161630,\nSession Dir: /home/mohammed-seddik/PFE Folder/ztam-platform/keycloak-db-spi/.github/java-upgrade/20260306161630"
+}}).
+2026-03-06T16:19:22.772Z [INFO] ----------------------invoked report_event----------------------
+2026-03-06T16:19:29.628Z [INFO] ---------------------prepare report_event----------------------
+2026-03-06T16:19:29.628Z [INFO] [Tool.prepareInvocation]({name: report_event, input: {
+  "event": "planExecutionStarted",
+  "phase": "execute",
+  "projectPath": "/home/mohammed-seddik/PFE Folder/ztam-platform/keycloak-db-spi",
+  "sessionId": "20260306161630",
+  "status": "succeeded"
+}}).
+2026-03-06T16:19:29.628Z [INFO] [Tool.prepareInvocation] do prepare invocation.
+2026-03-06T16:19:29.628Z [INFO] [Tool.prepareInvocation]({result: {
+  "invocationMessage": "Report upgrade event"
+}}).
+2026-03-06T16:19:29.628Z [INFO] ----------------------prepared report_event----------------------
+2026-03-06T16:19:29.666Z [INFO] ----------------------invoke report_event----------------------
+2026-03-06T16:19:29.666Z [INFO] [Tool.invoke]({name: report_event, input: {
+  "event": "planExecutionStarted",
+  "phase": "execute",
+  "projectPath": "/home/mohammed-seddik/PFE Folder/ztam-platform/keycloak-db-spi",
+  "sessionId": "20260306161630",
+  "status": "succeeded"
+}}).
+2026-03-06T16:19:29.666Z [INFO] [Tool.invoke] do invoke.
+2026-03-06T16:19:29.679Z [INFO] [Tool.invoke]({result: {
+  "message": "Event 'planExecutionStarted' reported!\nSession ID: 20260306161630,\nSession Dir: /home/mohammed-seddik/PFE Folder/ztam-platform/keycloak-db-spi/.github/java-upgrade/20260306161630"
+}}).
+2026-03-06T16:19:29.679Z [INFO] ----------------------invoked report_event----------------------
+2026-03-06T16:20:03.028Z [INFO] ---------------------prepare install_maven----------------------
+2026-03-06T16:20:03.028Z [INFO] [Tool.prepareInvocation]({name: install_maven, input: {
+  "sessionId": "20260306161630",
+  "version": "latest"
+}}).
+2026-03-06T16:20:03.028Z [INFO] [Tool.prepareInvocation] do prepare invocation.
+2026-03-06T16:20:03.629Z [INFO] [Tool.prepareInvocation]({result: {
+  "invocationMessage": "Download and install Maven",
+  "confirmationMessages": {
+    "title": "Download and install Maven",
+    "message": "\nThis tool will download and install Maven latest from Apache with below settings.\n- **Version**: latest\n- **Vendor**: Apache\n- **Url**: https://dlcdn.apache.org/maven/maven-3/3.9.13/binaries/apache-maven-3.9.13-bin.tar.gz\n- **Destination**: `/home/mohammed-seddik/.maven`\n- **Checksum**: SHA512: d9ccd44ba2991586e359c29eb86780ae8ff4ec1b88b0b8af3af074803472690cf2017782a9c4401343c62cbcd056231db9612e1e551cbd9747c21746d732c015\n- **Signature**: https://dlcdn.apache.org/maven/maven-3/3.9.13/binaries/apache-maven-3.9.13-bin.tar.gz.asc\n- **Public Key**: https://downloads.apache.org/maven/KEYS\n"
+  }
+}}).
+2026-03-06T16:20:03.629Z [INFO] ----------------------prepared install_maven----------------------
+2026-03-06T16:20:10.471Z [INFO] ----------------------invoke install_maven----------------------
+2026-03-06T16:20:10.471Z [INFO] [Tool.invoke]({name: install_maven, input: {
+  "sessionId": "20260306161630",
+  "version": "latest"
+}}).
+2026-03-06T16:20:10.472Z [INFO] [Tool.invoke] do invoke.
+2026-03-06T16:20:13.069Z [INFO] [Tool.invoke]({result: {
+  "result": {
+    "name": "mvn",
+    "path": "/home/mohammed-seddik/.maven/maven-3.9.13/bin",
+    "version": "3.9.13"
+  },
+  "message": "Maven latest is installed at /home/mohammed-seddik/.maven/maven-3.9.13/bin",
+  "telemetry": {
+    "tool": "Maven",
+    "version": "latest"
+  }
+}}).
+2026-03-06T16:20:13.069Z [INFO] ----------------------invoked install_maven----------------------
+2026-03-06T16:21:00.837Z [INFO] ---------------------prepare report_event----------------------
+2026-03-06T16:21:00.837Z [INFO] [Tool.prepareInvocation]({name: report_event, input: {
+  "details": {
+    "jdkPath": "/usr/lib/jvm/java-17-openjdk-amd64",
+    "buildToolPath": "/home/mohammed-seddik/.maven/maven-3.9.13/bin"
+  },
+  "event": "environmentSetup",
+  "phase": "execute",
+  "projectPath": "/home/mohammed-seddik/PFE Folder/ztam-platform/keycloak-db-spi",
+  "sessionId": "20260306161630",
+  "status": "succeeded"
+}}).
+2026-03-06T16:21:00.837Z [INFO] [Tool.prepareInvocation] do prepare invocation.
+2026-03-06T16:21:00.837Z [INFO] [Tool.prepareInvocation]({result: {
+  "invocationMessage": "Report upgrade event"
+}}).
+2026-03-06T16:21:00.837Z [INFO] ----------------------prepared report_event----------------------
+2026-03-06T16:21:00.864Z [INFO] ----------------------invoke report_event----------------------
+2026-03-06T16:21:00.864Z [INFO] [Tool.invoke]({name: report_event, input: {
+  "details": {
+    "jdkPath": "/usr/lib/jvm/java-17-openjdk-amd64",
+    "buildToolPath": "/home/mohammed-seddik/.maven/maven-3.9.13/bin"
+  },
+  "event": "environmentSetup",
+  "phase": "execute",
+  "projectPath": "/home/mohammed-seddik/PFE Folder/ztam-platform/keycloak-db-spi",
+  "sessionId": "20260306161630",
+  "status": "succeeded"
+}}).
+2026-03-06T16:21:00.864Z [INFO] [Tool.invoke] do invoke.
+2026-03-06T16:21:00.865Z [INFO] Project /home/mohammed-seddik/PFE Folder/ztam-platform/keycloak-db-spi is a maven project, try to get java version from pom.xml
+2026-03-06T16:21:00.866Z [INFO] Project java version: 17
+2026-03-06T16:21:00.866Z [INFO] Build tool type detected from path: mvn
+2026-03-06T16:21:00.866Z [INFO] Build tool type: mvn
+2026-03-06T16:21:00.866Z [INFO] JDK: {
+  "name": "java",
+  "path": "/usr/lib/jvm/java-17-openjdk-amd64/bin",
+  "version": "17"
+}
+2026-03-06T16:21:00.866Z [INFO] Build tool: {
+  "name": "mvn",
+  "path": "/home/mohammed-seddik/.maven/maven-3.9.13/bin",
+  "version": ""
+}
+2026-03-06T16:21:00.866Z [INFO] Project config: {
+  "buildTool": {
+    "path": "/home/mohammed-seddik/.maven/maven-3.9.13/bin",
+    "name": "mvn",
+    "version": ""
+  },
+  "jdk": {
+    "path": "/usr/lib/jvm/java-17-openjdk-amd64/bin",
+    "name": "java",
+    "version": "17"
+  },
+  "name": "keycloak-db-spi",
+  "dir": "/home/mohammed-seddik/PFE Folder/ztam-platform/keycloak-db-spi"
+}
+2026-03-06T16:21:00.974Z [INFO] [Tool.invoke]({result: {
+  "message": "Event 'environmentSetup' reported!\nSession ID: 20260306161630,\nSession Dir: /home/mohammed-seddik/PFE Folder/ztam-platform/keycloak-db-spi/.github/java-upgrade/20260306161630"
+}}).
+2026-03-06T16:21:00.974Z [INFO] ----------------------invoked report_event----------------------
