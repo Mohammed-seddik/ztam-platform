@@ -548,3 +548,186 @@
   "message": "Event 'testCompleted' reported!\nSession ID: 20260306161630,\nSession Dir: /home/mohammed-seddik/PFE Folder/ztam-platform/keycloak-db-spi/.github/java-upgrade/20260306161630"
 }}).
 2026-03-06T16:27:54.029Z [INFO] ----------------------invoked report_event----------------------
+2026-03-06T16:28:21.737Z [INFO] ---------------------prepare report_event----------------------
+2026-03-06T16:28:21.737Z [INFO] [Tool.prepareInvocation]({name: report_event, input: {
+  "details": {
+    "commitId": "64b5f3c",
+    "stepNumber": 4,
+    "stepTitle": "Final Validation"
+  },
+  "event": "upgradeValidationCompleted",
+  "phase": "execute",
+  "projectPath": "/home/mohammed-seddik/PFE Folder/ztam-platform/keycloak-db-spi",
+  "sessionId": "20260306161630",
+  "status": "succeeded"
+}}).
+2026-03-06T16:28:21.737Z [INFO] [Tool.prepareInvocation] do prepare invocation.
+2026-03-06T16:28:21.737Z [INFO] [Tool.prepareInvocation]({result: {
+  "invocationMessage": "Report upgrade event"
+}}).
+2026-03-06T16:28:21.737Z [INFO] ----------------------prepared report_event----------------------
+2026-03-06T16:28:21.798Z [INFO] ----------------------invoke report_event----------------------
+2026-03-06T16:28:21.798Z [INFO] [Tool.invoke]({name: report_event, input: {
+  "details": {
+    "commitId": "64b5f3c",
+    "stepNumber": 4,
+    "stepTitle": "Final Validation"
+  },
+  "event": "upgradeValidationCompleted",
+  "phase": "execute",
+  "projectPath": "/home/mohammed-seddik/PFE Folder/ztam-platform/keycloak-db-spi",
+  "sessionId": "20260306161630",
+  "status": "succeeded"
+}}).
+2026-03-06T16:28:21.798Z [INFO] [Tool.invoke] do invoke.
+2026-03-06T16:28:21.798Z [INFO] [Tool.invoke]({result: {
+  "message": "Event 'upgradeValidationCompleted' reported!\nSession ID: 20260306161630,\nSession Dir: /home/mohammed-seddik/PFE Folder/ztam-platform/keycloak-db-spi/.github/java-upgrade/20260306161630"
+}}).
+2026-03-06T16:28:21.798Z [INFO] ----------------------invoked report_event----------------------
+2026-03-06T16:28:21.807Z [INFO] ---------------------prepare report_event----------------------
+2026-03-06T16:28:21.807Z [INFO] [Tool.prepareInvocation]({name: report_event, input: {
+  "event": "planExecutionCompleted",
+  "phase": "execute",
+  "projectPath": "/home/mohammed-seddik/PFE Folder/ztam-platform/keycloak-db-spi",
+  "sessionId": "20260306161630",
+  "status": "succeeded"
+}}).
+2026-03-06T16:28:21.807Z [INFO] [Tool.prepareInvocation] do prepare invocation.
+2026-03-06T16:28:21.807Z [INFO] [Tool.prepareInvocation]({result: {
+  "invocationMessage": "Report upgrade event"
+}}).
+2026-03-06T16:28:21.807Z [INFO] ----------------------prepared report_event----------------------
+2026-03-06T16:28:21.852Z [INFO] ----------------------invoke report_event----------------------
+2026-03-06T16:28:21.852Z [INFO] [Tool.invoke]({name: report_event, input: {
+  "event": "planExecutionCompleted",
+  "phase": "execute",
+  "projectPath": "/home/mohammed-seddik/PFE Folder/ztam-platform/keycloak-db-spi",
+  "sessionId": "20260306161630",
+  "status": "succeeded"
+}}).
+2026-03-06T16:28:21.852Z [INFO] [Tool.invoke] do invoke.
+2026-03-06T16:28:21.877Z [INFO] [Tool.invoke]({result: {
+  "message": "Event 'planExecutionCompleted' reported!\nSession ID: 20260306161630,\nSession Dir: /home/mohammed-seddik/PFE Folder/ztam-platform/keycloak-db-spi/.github/java-upgrade/20260306161630"
+}}).
+2026-03-06T16:28:21.877Z [INFO] ----------------------invoked report_event----------------------
+2026-03-06T17:26:13.270Z [INFO] ---------------------prepare validate_cves_for_java----------------------
+2026-03-06T17:26:13.270Z [INFO] [Tool.prepareInvocation]({name: validate_cves_for_java, input: {
+  "dependencies": [
+    "com.mysql:mysql-connector-j:8.3.0",
+    "org.mindrot:jbcrypt:0.4",
+    "org.keycloak:keycloak-server-spi:26.5.5",
+    "org.keycloak:keycloak-server-spi-private:26.5.5",
+    "org.keycloak:keycloak-services:26.5.5",
+    "org.keycloak:keycloak-core:26.5.5",
+    "jakarta.ws.rs:jakarta.ws.rs-api:3.1.0"
+  ],
+  "projectPath": "/home/mohammed-seddik/PFE Folder/ztam-platform/keycloak-db-spi",
+  "sessionId": "20260306161630"
+}}).
+2026-03-06T17:26:13.271Z [INFO] [Tool.prepareInvocation] do prepare invocation.
+2026-03-06T17:26:13.271Z [INFO] [Tool.prepareInvocation]({result: {
+  "invocationMessage": "Validate CVEs"
+}}).
+2026-03-06T17:26:13.271Z [INFO] ----------------------prepared validate_cves_for_java----------------------
+2026-03-06T17:26:13.635Z [INFO] ----------------------invoke validate_cves_for_java----------------------
+2026-03-06T17:26:13.635Z [INFO] [Tool.invoke]({name: validate_cves_for_java, input: {
+  "dependencies": [
+    "com.mysql:mysql-connector-j:8.3.0",
+    "org.mindrot:jbcrypt:0.4",
+    "org.keycloak:keycloak-server-spi:26.5.5",
+    "org.keycloak:keycloak-server-spi-private:26.5.5",
+    "org.keycloak:keycloak-services:26.5.5",
+    "org.keycloak:keycloak-core:26.5.5",
+    "jakarta.ws.rs:jakarta.ws.rs-api:3.1.0"
+  ],
+  "projectPath": "/home/mohammed-seddik/PFE Folder/ztam-platform/keycloak-db-spi",
+  "sessionId": "20260306161630"
+}}).
+2026-03-06T17:26:13.635Z [INFO] [Tool.invoke] do invoke.
+2026-03-06T17:26:13.636Z [INFO] Project /home/mohammed-seddik/PFE Folder/ztam-platform/keycloak-db-spi is a maven project, try to get java version from pom.xml
+2026-03-06T17:26:13.637Z [INFO] Project java version: 21
+2026-03-06T17:26:13.637Z [INFO] Maven project detected.
+2026-03-06T17:26:13.637Z [INFO] Build tool type: mvn
+2026-03-06T17:26:13.643Z [INFO] JDK: {
+  "name": "java",
+  "path": "/usr/lib/jvm/java-21-openjdk-amd64/bin",
+  "version": "21"
+}
+2026-03-06T17:26:13.646Z [INFO] Build tool: {
+  "name": "mvn",
+  "path": "/home/mohammed-seddik/.maven/maven-3.9.13/bin",
+  "version": "",
+  "source": "install"
+}
+2026-03-06T17:26:13.646Z [INFO] Project config: {
+  "buildTool": {
+    "path": "/home/mohammed-seddik/.maven/maven-3.9.13/bin",
+    "name": "mvn",
+    "version": "",
+    "source": "install"
+  },
+  "jdk": {
+    "path": "/usr/lib/jvm/java-21-openjdk-amd64/bin",
+    "name": "java",
+    "version": "21"
+  },
+  "name": "keycloak-db-spi",
+  "dir": "/home/mohammed-seddik/PFE Folder/ztam-platform/keycloak-db-spi"
+}
+2026-03-06T17:26:13.646Z [INFO] [Environment] Running command (Java undefined): mvn dependency:tree -B
+/bin/sh: 1: mvn: not found
+2026-03-06T17:26:13.662Z [ERROR] [MavenBuildTool] Failed to get dependencies from dependency tree: Error: Failed to run command: "mvn dependency:tree -B" with error code 127
+/bin/sh: 1: mvn: not found
+2026-03-06T17:26:13.663Z [INFO] [Environment] Running command (Java undefined): mvn help:effective-pom -B
+/bin/sh: 1: mvn: not found
+2026-03-06T17:26:13.682Z [ERROR] [MavenBuildTool] Failed to get dependencies from effective pom: Error: Failed to run command: "mvn help:effective-pom -B" with error code 127
+/bin/sh: 1: mvn: not found
+2026-03-06T17:26:13.683Z [INFO] [MavenBuildTool] Getting Java version of /home/mohammed-seddik/PFE Folder/ztam-platform/keycloak-db-spi from pom.xml
+2026-03-06T17:26:13.683Z [INFO] [MavenBuildTool] Searching for pom.xml files in /home/mohammed-seddik/PFE Folder/ztam-platform/keycloak-db-spi
+2026-03-06T17:26:13.683Z [INFO] [MavenBuildTool] Getting all module coordinates of /home/mohammed-seddik/PFE Folder/ztam-platform/keycloak-db-spi
+2026-03-06T17:26:13.683Z [INFO] [MavenBuildTool] Getting effective POMs of /home/mohammed-seddik/PFE Folder/ztam-platform/keycloak-db-spi
+2026-03-06T17:26:13.683Z [INFO] [Environment] Running command (Java undefined): mvn help:effective-pom -Doutput=effective-pom-993ee797-9c30-4c29-a7a8-b988f9e550cc.log
+/bin/sh: 1: mvn: not found
+2026-03-06T17:26:13.700Z [INFO] [MavenBuildTool] Failed to get effective POMs: Error: ENOENT: no such file or directory, open '/home/mohammed-seddik/PFE Folder/ztam-platform/keycloak-db-spi/effective-pom-993ee797-9c30-4c29-a7a8-b988f9e550cc.log'
+2026-03-06T17:26:13.700Z [INFO] [MavenBuildTool] Found pom.xml files: 
+2026-03-06T17:26:13.700Z [INFO] [Environment] Running command (Java undefined): mvn help:evaluate -Dexpression=project.properties -q -DforceStdout
+/bin/sh: 1: mvn: not found
+2026-03-06T17:26:13.721Z [INFO] [Environment] Running command (Java undefined): mvn help:effective-pom -DforceStdout
+/bin/sh: 1: mvn: not found
+2026-03-06T17:26:13.740Z [ERROR] [MavenBuildTool] Failed to get Java version of /home/mohammed-seddik/PFE Folder/ztam-platform/keycloak-db-spi
+2026-03-06T17:26:13.747Z [INFO] [MavenBuildTool] Getting all module coordinates of /home/mohammed-seddik/PFE Folder/ztam-platform/keycloak-db-spi
+2026-03-06T17:26:13.747Z [INFO] [MavenBuildTool] Getting effective POMs of /home/mohammed-seddik/PFE Folder/ztam-platform/keycloak-db-spi
+2026-03-06T17:26:13.747Z [INFO] [Environment] Running command (Java undefined): mvn help:effective-pom -Doutput=effective-pom-37603a91-2da5-449b-830b-694a73bdaedf.log
+/bin/sh: 1: mvn: not found
+2026-03-06T17:26:13.771Z [INFO] [MavenBuildTool] Failed to get effective POMs: Error: ENOENT: no such file or directory, open '/home/mohammed-seddik/PFE Folder/ztam-platform/keycloak-db-spi/effective-pom-37603a91-2da5-449b-830b-694a73bdaedf.log'
+2026-03-06T17:26:13.773Z [INFO] Getting CVEs for dependencies: com.mysql:mysql-connector-j:8.3.0,org.mindrot:jbcrypt:0.4,org.keycloak:keycloak-server-spi:26.5.5,org.keycloak:keycloak-server-spi-private:26.5.5,org.keycloak:keycloak-services:26.5.5,org.keycloak:keycloak-core:26.5.5,jakarta.ws.rs:jakarta.ws.rs-api:3.1.0
+2026-03-06T17:26:13.773Z [INFO] getting CVEs for dependencies:
+ - com.mysql:mysql-connector-j:8.3.0
+  - org.mindrot:jbcrypt:0.4
+  - org.keycloak:keycloak-server-spi:26.5.5
+  - org.keycloak:keycloak-server-spi-private:26.5.5
+  - org.keycloak:keycloak-services:26.5.5
+  - org.keycloak:keycloak-core:26.5.5
+  - jakarta.ws.rs:jakarta.ws.rs-api:3.1.0...
+2026-03-06T17:26:13.773Z [INFO] getting gitHub access token...
+2026-03-06T17:26:13.782Z [INFO] Processing batch 1/1, size: 7
+2026-03-06T17:26:13.789Z [INFO] listing CVEs from GitHub for dependencies [
+  "com.mysql:mysql-connector-j:8.3.0",
+  "org.mindrot:jbcrypt:0.4",
+  "org.keycloak:keycloak-server-spi:26.5.5",
+  "org.keycloak:keycloak-server-spi-private:26.5.5",
+  "org.keycloak:keycloak-services:26.5.5",
+  "org.keycloak:keycloak-core:26.5.5",
+  "jakarta.ws.rs:jakarta.ws.rs-api:3.1.0"
+]
+2026-03-06T17:26:14.320Z [INFO] Fetched 0 total advisories across all pages
+2026-03-06T17:26:14.320Z [INFO] grouping CVEs and finding max patched version by dep...
+2026-03-06T17:26:14.320Z [INFO] done getting 0 CVEs for 7 dependencies
+2026-03-06T17:26:14.321Z [INFO] calculating patched version by dep...
+2026-03-06T17:26:14.321Z [INFO] finished getting CVEs for dependencies.
+2026-03-06T17:26:14.321Z [INFO] Found 0 dependencies with known CVEs
+2026-03-06T17:26:14.321Z [INFO] No known CVEs that need to be fixed are found for dependencies: com.mysql:mysql-connector-j:8.3.0,org.mindrot:jbcrypt:0.4,org.keycloak:keycloak-server-spi:26.5.5,org.keycloak:keycloak-server-spi-private:26.5.5,org.keycloak:keycloak-services:26.5.5,org.keycloak:keycloak-core:26.5.5,jakarta.ws.rs:jakarta.ws.rs-api:3.1.0
+2026-03-06T17:26:14.321Z [INFO] [Tool.invoke]({result: {
+  "message": "No known CVEs that need to be fixed are found for the given dependencies."
+}}).
+2026-03-06T17:26:14.321Z [INFO] ----------------------invoked validate_cves_for_java----------------------
