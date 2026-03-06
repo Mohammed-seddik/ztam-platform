@@ -1,6 +1,11 @@
 # environment secrets
 .env
 
+# TLS private keys
+envoy/certs/*.key
+envoy/certs/*.crt
+envoy/certs/*.pem
+
 # Java build output
 *.jar
 target/

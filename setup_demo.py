@@ -4,8 +4,8 @@ import json, base64, os, urllib.request, urllib.parse
 
 KC            = os.environ.get("KEYCLOAK_URL",   "http://localhost:8080")
 REALM         = os.environ.get("KC_REALM",       "test-tenant")
-KC_ADMIN_PASS = os.environ.get("KC_ADMIN_PASS",  "admin_secret_456")
-KC_CLIENT_SECRET = os.environ.get("KC_CLIENT_SECRET", "test-app-secret-2024")
+KC_ADMIN_PASS = os.environ["KC_ADMIN_PASS"]
+KC_CLIENT_SECRET = os.environ["KC_CLIENT_SECRET"]
 
 
 def kc(method, path, data=None, token=None, form=False):
