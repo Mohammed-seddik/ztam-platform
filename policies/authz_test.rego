@@ -134,3 +134,33 @@ test_no_roles_deny_reason if {
                      "request": {"method": "GET", "path": "/api/tasks"}}
       with data.permissions as _perms
 }
+
+# ── multi-tenant permissions ────────────────────────────────────────────────
+# Mock tenants.json format: top-level key is the tenant_id (= Keycloak azp claim)
+_tenant_perms := {
+    "myapp": {
+        "roles": {
+            "manager": {
+                "allowed_paths":   ["/api/"],
+                "denied_paths":    ["/admin/"],
+                "allowed_methods": ["GET", "POST", "PUT", "PATCH", "DELETE"]
+            }
+        }
+    }
+}
+
+test_tenant_specific_role_allowed if {
+    authz.allow
+      with input as {"user": {"id": "u5", "roles": ["manager"], "tenant_id": "myapp"},
+                     "request": {"method": "GET", "path": "/api/reports"}}
+      with data.tenants as _tenant_perms
+      with data.permissions as _perms
+}
+
+test_tenant_specific_role_denied_admin_path if {
+    not authz.allow
+      with input as {"user": {"id": "u5", "roles": ["manager"], "tenant_id": "myapp"},
+                     "request": {"method": "DELETE", "path": "/admin/users"}}
+      with data.tenants as _tenant_perms
+      with data.permissions as _perms
+}

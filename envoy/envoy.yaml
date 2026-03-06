@@ -96,6 +96,7 @@ static_resources:
                 route_config:
                   name: local_route
                   virtual_hosts:
+                    # __ZTAM_TENANT_ROUTES__ (do not remove — used by onboard-tenant.sh)
                     - name: backend
                       domains: ["*"]
                       # ── Security response headers (applied to every response) ──
@@ -217,3 +218,4 @@ static_resources:
                     socket_address:
                       address: testapp
                       port_value: 3000
+    # __ZTAM_TENANT_CLUSTERS__ (do not remove — used by onboard-tenant.sh)
