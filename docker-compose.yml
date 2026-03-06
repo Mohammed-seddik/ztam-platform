@@ -17,7 +17,7 @@ services:
       retries: 10
 
   keycloak:
-    image: quay.io/keycloak/keycloak:26.3.0
+    image: quay.io/keycloak/keycloak:26.5.5
     command: start-dev
     volumes:
       - ./keycloak-db-spi/target/keycloak-db-spi.jar:/opt/keycloak/providers/keycloak-db-spi.jar
