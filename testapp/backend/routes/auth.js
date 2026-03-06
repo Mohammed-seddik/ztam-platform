@@ -16,17 +16,6 @@ router.post("/register", async (req, res) => {
       .json({ error: "username and password are required." });
   }
 
-  // Input length / content validation
-  if (typeof username !== "string" || username.trim().length < 3 || username.trim().length > 50) {
-    return res.status(400).json({ error: "Username must be 3–50 characters." });
-  }
-  if (!/^[a-zA-Z0-9_\-]+$/.test(username.trim())) {
-    return res.status(400).json({ error: "Username may only contain letters, numbers, _ and -." });
-  }
-  if (typeof password !== "string" || password.length < 8 || password.length > 128) {
-    return res.status(400).json({ error: "Password must be 8–128 characters." });
-  }
-
   const allowedRoles = ["admin", "user"];
   const userRole = allowedRoles.includes(role) ? role : "user";
 
@@ -56,14 +45,6 @@ router.post("/login", async (req, res) => {
     return res
       .status(400)
       .json({ error: "username and password are required." });
-  }
-
-  // Input length guards (prevent oversized payloads reaching the DB)
-  if (typeof username !== "string" || username.trim().length > 50) {
-    return res.status(401).json({ error: "Invalid credentials." });
-  }
-  if (typeof password !== "string" || password.length > 128) {
-    return res.status(401).json({ error: "Invalid credentials." });
   }
 
   try {

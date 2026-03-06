@@ -13,8 +13,5 @@ RUN npm install --omit=dev
 # Copy remaining backend source
 COPY backend/ .
 
-# Run as non-root (node user is built into node:alpine images)
-USER node
-
 EXPOSE 3000
 CMD ["node", "server.js"]

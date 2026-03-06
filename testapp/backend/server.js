@@ -11,18 +11,8 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // ── Middleware ────────────────────────────────────────────────────────────────
-// Security headers (belt-and-suspenders; Envoy also sets many of these)
-app.use((req, res, next) => {
-  res.setHeader("X-Content-Type-Options", "nosniff");
-  res.setHeader("X-Frame-Options", "SAMEORIGIN");
-  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
-  res.setHeader("X-XSS-Protection", "0"); // modern browsers, rely on CSP
-  next();
-});
-// CORS: testapp is behind Envoy and should not be called cross-origin directly
-app.use(cors({ origin: false }));
-// Body size limit: reject oversized payloads early
-app.use(express.json({ limit: "32kb" }));
+app.use(cors());
+app.use(express.json());
 
 // Serve frontend static files from ../frontend
 app.use(express.static(path.join(__dirname, "..", "frontend")));
