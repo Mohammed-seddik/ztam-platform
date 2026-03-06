@@ -42,10 +42,6 @@ router.post("/", async (req, res) => {
     return res.status(400).json({ error: "title is required." });
   }
 
-  if (title.trim().length > 200) {
-    return res.status(400).json({ error: "title must be 200 characters or fewer." });
-  }
-
   try {
     const [result] = await db.execute(
       "INSERT INTO tasks (title, user_id) VALUES (?, ?)",
@@ -62,10 +58,6 @@ router.post("/", async (req, res) => {
 // admin can delete any task; user only their own
 router.delete("/:id", async (req, res) => {
   const taskId = parseInt(req.params.id, 10);
-
-  if (!Number.isInteger(taskId) || taskId <= 0) {
-    return res.status(400).json({ error: "Invalid task ID." });
-  }
 
   try {
     let result;
