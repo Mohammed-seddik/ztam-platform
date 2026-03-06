@@ -98,6 +98,30 @@ static_resources:
                   virtual_hosts:
                     - name: backend
                       domains: ["*"]
+                      # ── Security response headers (applied to every response) ──
+                      response_headers_to_add:
+                        - header:
+                            key: Strict-Transport-Security
+                            value: "max-age=63072000; includeSubDomains; preload"
+                          keep_empty_value: false
+                        - header:
+                            key: X-Content-Type-Options
+                            value: "nosniff"
+                        - header:
+                            key: X-Frame-Options
+                            value: "SAMEORIGIN"
+                        - header:
+                            key: Referrer-Policy
+                            value: "strict-origin-when-cross-origin"
+                        - header:
+                            key: Permissions-Policy
+                            value: "geolocation=(), microphone=(), camera=(), payment=()"
+                        - header:
+                            key: Content-Security-Policy
+                            value: "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'"
+                        - header:
+                            key: Cache-Control
+                            value: "no-store"
                       routes:
                         # ── Frontend HTML pages: pass through, no auth needed ──
                         - match:

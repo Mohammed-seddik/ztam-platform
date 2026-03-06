@@ -3,12 +3,12 @@
     "user": {
       "allowed_paths":   ["/api/"],
       "denied_paths":    ["/admin/", "/admin"],
-      "allowed_methods": ["GET", "POST"]
+      "allowed_methods": ["GET", "POST", "DELETE", "PUT", "PATCH"]
     },
     "editor": {
       "allowed_paths":   ["/api/"],
       "denied_paths":    ["/admin/", "/admin"],
-      "allowed_methods": ["GET", "POST"]
+      "allowed_methods": ["GET", "POST", "DELETE", "PUT", "PATCH"]
     },
     "viewer": {
       "allowed_paths":   ["/api/"],

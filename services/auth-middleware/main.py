@@ -4,8 +4,10 @@ Real JWT validation (RS256 via JWKS), real OPA call, real token translation.
 """
 
 import asyncio
+import collections
 import json
 import os
+import threading
 import time
 import logging
 from typing import Optional
@@ -36,6 +38,38 @@ _jwks_cache: dict = {}
 _jwks_fetched_at: float = 0.0
 _jwks_lock = asyncio.Lock()
 JWKS_TTL: int = 300  # seconds
+
+# ─── Startup validation — crash immediately if required secrets are empty ─────
+for _secret_name, _secret_val in (
+    ("KC_CLIENT_SECRET", KC_CLIENT_SECRET),
+    ("TESTAPP_JWT_SECRET", TESTAPP_JWT_SECRET or ""),
+):
+    if not _secret_val:
+        raise RuntimeError(
+            f"FATAL: required environment variable {_secret_name!r} is not set. "
+            "Refusing to start."
+        )
+
+# ─── In-memory login rate limiter (per source IP) ─────────────────────────────
+_rl_lock = threading.Lock()
+_rl_state: dict = {}           # ip → {"count": int, "reset_at": float}
+_LOGIN_RATE_LIMIT = 10         # max attempts per window
+_LOGIN_RATE_WINDOW = 60.0      # seconds
+
+
+def _check_rate_limit(client_ip: str) -> bool:
+    """Return True if the request is allowed, False if rate-limited."""
+    now = time.time()
+    with _rl_lock:
+        entry = _rl_state.get(client_ip)
+        if entry is None or now >= entry["reset_at"]:
+            _rl_state[client_ip] = {"count": 1, "reset_at": now + _LOGIN_RATE_WINDOW}
+            return True
+        if entry["count"] >= _LOGIN_RATE_LIMIT:
+            return False
+        entry["count"] += 1
+        return True
+
 
 # Keycloak internal roles that should never reach OPA or downstream headers
 _KC_INTERNAL_ROLES = frozenset({
@@ -127,6 +161,22 @@ async def login_proxy(request: Request):
             status_code=400, media_type="application/json"
         )
 
+    # ── Input length limits (prevent oversized-payload DoS) ──────────────────
+    if len(username) > 200 or len(password) > 1000:
+        return Response(
+            content='{"error":"invalid credentials."}',
+            status_code=400, media_type="application/json"
+        )
+
+    # ── Per-IP rate limit: max 10 login attempts per 60 s ────────────────────
+    client_ip: str = (request.client.host if request.client else "unknown")
+    if not _check_rate_limit(client_ip):
+        logger.warning("Login rate limit hit for IP %s", client_ip)
+        return Response(
+            content='{"error":"too many login attempts, please try again later."}',
+            status_code=429, media_type="application/json"
+        )
+
     # ── 1. Authenticate via Keycloak token endpoint ───────────────────────────
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
@@ -146,7 +196,7 @@ async def login_proxy(request: Request):
                         status_code=503, media_type="application/json")
 
     if kc_resp.status_code != 200:
-        logger.warning("Keycloak rejected login for %s: %s", username, kc_resp.text)
+        logger.warning("Keycloak rejected login for %s: HTTP %s", username, kc_resp.status_code)
         return Response(content='{"error":"Invalid credentials."}',
                         status_code=401, media_type="application/json")
 

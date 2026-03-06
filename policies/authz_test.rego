@@ -12,12 +12,12 @@ _perms := {
         "user": {
             "allowed_paths":   ["/api/"],
             "denied_paths":    ["/admin/", "/admin"],
-            "allowed_methods": ["GET", "POST"]
+            "allowed_methods": ["GET", "POST", "DELETE", "PUT", "PATCH"]
         },
         "editor": {
             "allowed_paths":   ["/api/"],
             "denied_paths":    ["/admin/", "/admin"],
-            "allowed_methods": ["GET", "POST"]
+            "allowed_methods": ["GET", "POST", "DELETE", "PUT", "PATCH"]
         },
         "viewer": {
             "allowed_paths":   ["/api/"],
@@ -59,10 +59,17 @@ test_user_post_api if {
       with data.permissions as _perms
 }
 
-test_user_denied_delete if {
+test_user_delete_own_task if {
+    authz.allow
+      with input as {"user": {"id": "u2", "roles": ["user"]},
+                     "request": {"method": "DELETE", "path": "/api/tasks/5"}}
+      with data.permissions as _perms
+}
+
+test_user_denied_admin_delete if {
     not authz.allow
       with input as {"user": {"id": "u2", "roles": ["user"]},
-                     "request": {"method": "DELETE", "path": "/api/tasks"}}
+                     "request": {"method": "DELETE", "path": "/admin/users"}}
       with data.permissions as _perms
 }
 

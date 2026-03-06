@@ -22,7 +22,7 @@ services:
     volumes:
       - ./keycloak-db-spi/target/keycloak-db-spi.jar:/opt/keycloak/providers/keycloak-db-spi.jar
     environment:
-      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN: ${KC_ADMIN_USER:-admin}
       KEYCLOAK_ADMIN_PASSWORD: ${KC_ADMIN_PASS}
       KC_DB: postgres
       KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
@@ -31,6 +31,8 @@ services:
       KC_HOSTNAME: localhost
       KC_HOSTNAME_STRICT: "false"
       KC_HOSTNAME_STRICT_HTTPS: "false"
+    # Port 8080 is kept for admin console access.
+    # In production: restrict with firewall rules or put behind Envoy.
     ports:
       - "8080:8080"
     networks: [ztam]
@@ -50,8 +52,8 @@ services:
     command: run --server --addr 0.0.0.0:8181 --watch /policies --ignore '*_test.rego'
     volumes:
       - ./policies:/policies:ro
-    ports:
-      - "8181:8181"
+    # No external port: OPA is reachable only from auth-middleware on the internal network.
+    # Exposing OPA externally would allow anyone to query the policy engine.
     networks: [ztam]
     restart: unless-stopped
     healthcheck:
@@ -66,11 +68,11 @@ services:
       KEYCLOAK_URL: http://keycloak:8080
       KC_REALM: ${KC_REALM}
       KC_CLIENT_ID: ${KC_CLIENT_ID:-test-app}
-      KC_CLIENT_SECRET: ${KC_CLIENT_SECRET:-test-app-secret-2024}
+      KC_CLIENT_SECRET: ${KC_CLIENT_SECRET}
       OPA_URL: http://opa:8181
-      TESTAPP_JWT_SECRET: ${TESTAPP_JWT_SECRET:-super_secret_jwt_key_for_ztam_demo_2024}
-    ports:
-      - "8001:8001"
+      TESTAPP_JWT_SECRET: ${TESTAPP_JWT_SECRET}
+    # No external port: only Envoy calls auth-middleware via ext_authz on the internal network.
+    # Exposing this port would allow bypassing the policy engine entirely.
     networks: [ztam]
     restart: unless-stopped
     depends_on:
@@ -85,8 +87,8 @@ services:
       - ./envoy/envoy.yaml:/etc/envoy/envoy.yaml:ro
       - ./envoy/certs:/etc/envoy/certs:ro
     ports:
-      - "80:8080"
-      - "443:8443"
+      - "80:8080"       # HTTP  → redirects to HTTPS
+      - "443:8443"      # HTTPS → all traffic, TLS terminated here
     networks: [ztam]
     restart: unless-stopped
     depends_on:
@@ -96,32 +98,32 @@ services:
   testapp-db:
     image: mysql:8
     environment:
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-taskroot}
-      MYSQL_DATABASE: ${MYSQL_DATABASE:-taskapp}
-      MYSQL_USER: ${MYSQL_USER:-taskuser}
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-taskpass}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
     volumes:
       - ./testapp/schema.sql:/docker-entrypoint-initdb.d/schema.sql
       - testapp-db-data:/var/lib/mysql
     networks: [ztam]
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "${MYSQL_USER:-taskuser}", "--password=${MYSQL_PASSWORD:-taskpass}"]
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "${MYSQL_USER}", "--password=${MYSQL_PASSWORD}"]
       interval: 10s
       timeout: 5s
       retries: 15
 
   testapp:
     build: ./testapp
-    ports:
-      - "3001:3000"
+    # No external port: all traffic must go through Envoy (which enforces ZTAM auth).
+    # Exposing port 3001 would allow unauthenticated direct access to the API.
     environment:
       DB_HOST: testapp-db
       DB_PORT: 3306
-      DB_USER: ${MYSQL_USER:-taskuser}
-      DB_PASSWORD: ${MYSQL_PASSWORD:-taskpass}
-      DB_NAME: ${MYSQL_DATABASE:-taskapp}
-      JWT_SECRET: ${TESTAPP_JWT_SECRET:-super_secret_jwt_key_for_ztam_demo_2024}
+      DB_USER: ${MYSQL_USER}
+      DB_PASSWORD: ${MYSQL_PASSWORD}
+      DB_NAME: ${MYSQL_DATABASE}
+      JWT_SECRET: ${TESTAPP_JWT_SECRET}
       JWT_EXPIRES_IN: 8h
       PORT: 3000
     networks: [ztam]
@@ -129,6 +131,11 @@ services:
     depends_on:
       testapp-db:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO /dev/null http://localhost:3000/ 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
 
 networks:
   ztam:
