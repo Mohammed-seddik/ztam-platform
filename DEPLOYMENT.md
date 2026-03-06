@@ -86,7 +86,26 @@ Example: Protecting a legacy app with NO login page.
 - [ ] **Keycloak**: Verify admin console is only accessible via SSH tunnel or bound to 127.0.0.1 (default in our `docker-compose.yml`).
 - [ ] **Secrets**: Ensure all passwords in `.env` are changed from defaults.
 
-## 8. Scaling and Backups
+## 9. Zero Trust Hardening: The "Fearless" Checklist
+
+To sell ZTAM as a true Zero Trust platform, you must enable these "Identity Hardening" features in the Keycloak Admin Console (`https://ztam.yourdomain.com:8080`):
+
+### A. Enforce Multi-Factor Authentication (MFA)
+Zero Trust is incomplete without MFA. 
+1. Go to **Authentication** → **Required Actions**.
+2. Set **Configure OTP** to **Enabled** and **Default Action**.
+3. Now, every new user will be forced to set up Google Authenticator/FreeOTP.
+
+### B. Harden Password Policies
+1. Go to **Authentication** → **Policies** → **Password Policy**.
+2. Add: **Minimum Length** (12), **Special Characters** (1), **Not Recently Used** (3).
+
+### C. Audit Logging
+ZTAM assumes "Breach is inevitable." You must have logs to audit:
+- **Service Logs**: `docker compose logs -f auth-middleware` shows every OPA allow/deny and why.
+- **Keycloak Events**: Go to **Events** → **Config** and turn on **Save Events**. This tracks every login, logout, and failed attempt.
+
+---
 
 - **Database**: For high availability, use a managed RDS/PostgreSQL instead of the containerized one.
 - **Backups**: Periodically dump the `postgres` database:

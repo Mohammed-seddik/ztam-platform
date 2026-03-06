@@ -291,7 +291,11 @@ $roles  = explode(',', $_SERVER['HTTP_X_USER_ROLES']);
 
 ### Hot Reload
 
-OPA watches `/policies` with `--watch`. Any change to `tenants.json` or `permissions.json` takes effect **within 1 second** — no restart required. Safe to edit live.
+OPA reloads the file automatically — no restart required. Safe to edit live.
+
+> [!TIP]
+> **What about other Databases (PostgreSQL, Oracle, SQL Server)?**
+> The current SPI is a template for MySQL. To support other DBs, you simply swap the JDBC driver in `keycloak-db-spi/pom.xml` and update the SQL queries in `MySqlUserStorageProvider.java`. The architecture remains identical for any database.
 
 ---
 
