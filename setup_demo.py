@@ -20,6 +20,9 @@ Steps:
 import json, base64, os, sys, urllib.request, urllib.parse
 from pathlib import Path
 
+# ── CLI flag: --force enables native user deletion ─────────────────────────────
+FORCE_MODE = "--force" in sys.argv
+
 # ── Load .env from project root ────────────────────────────────────────────────
 _env_path = Path(__file__).parent / ".env"
 if _env_path.exists():
@@ -255,17 +258,21 @@ for mapper in MAPPERS_TO_CREATE:
 
 # ── 6. Delete native Keycloak users (force SPI to serve them) ─────────────────
 step(6, "Removing any native Keycloak users (forces SPI federation)...")
-code, users = kc("GET", f"/admin/realms/{REALM}/users?max=100", token=ADMIN)
-deleted = []
-for u in (users if isinstance(users, list) else []):
-    if not u.get("federationLink"):
-        c, _ = kc("DELETE", f"/admin/realms/{REALM}/users/{u['id']}", token=ADMIN)
-        deleted.append((u.get("username", "?"), c))
-if deleted:
-    for name, c in deleted:
-        print(f"   Deleted native user '{name}' → HTTP {c}")
+if not FORCE_MODE:
+    print("   ⚠  Skipping native user deletion (pass --force to delete).")
+    print("      Run: python3 setup_demo.py --force")
 else:
-    print("   ✓ No native users found (already clean)")
+    code, users = kc("GET", f"/admin/realms/{REALM}/users?max=100", token=ADMIN)
+    deleted = []
+    for u in (users if isinstance(users, list) else []):
+        if not u.get("federationLink"):
+            c, _ = kc("DELETE", f"/admin/realms/{REALM}/users/{u['id']}", token=ADMIN)
+            deleted.append((u.get("username", "?"), c))
+    if deleted:
+        for name, c in deleted:
+            print(f"   Deleted native user '{name}' → HTTP {c}")
+    else:
+        print("   ✓ No native users found (already clean)")
 
 
 # ── 7. Smoke-test: login as alice ─────────────────────────────────────────────

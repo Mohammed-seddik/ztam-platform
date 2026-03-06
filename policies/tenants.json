@@ -12,10 +12,7 @@
         ],
         "allowed_methods": [
           "GET",
-          "POST",
-          "DELETE",
-          "PUT",
-          "PATCH"
+          "POST"
         ]
       },
       "editor": {
@@ -29,9 +26,9 @@
         "allowed_methods": [
           "GET",
           "POST",
-          "DELETE",
           "PUT",
-          "PATCH"
+          "PATCH",
+          "DELETE"
         ]
       },
       "viewer": {

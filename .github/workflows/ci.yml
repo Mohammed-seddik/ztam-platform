@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  opa-tests:
+    name: OPA Policy Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run OPA unit tests
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}/policies:/policies \
+            openpolicyagent/opa:0.64.1 \
+            test /policies -v
+
+  docker-build:
+    name: Docker Build Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build auth-middleware image
+        run: docker build ./services/auth-middleware
+      - name: Build testapp image
+        run: docker build ./testapp

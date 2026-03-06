@@ -4,6 +4,42 @@ All notable changes to the ZTAM Platform are documented in this file.
 
 ---
 
+## [v4.2.0] — Pre-Market Hardening: Production Readiness, Security, CI
+
+### Fixed (Security — Critical)
+
+- **Keycloak switched to production mode** — `start-dev` → `start` with explicit `--db`, `--hostname`, `--http-enabled` flags. DB credentials moved to command args per Keycloak 26 best practice.
+- **Keycloak admin port bound to localhost** — `8080:8080` → `127.0.0.1:8080:8080`. Prevents remote access to admin console without SSH tunnel.
+- **auth-middleware healthcheck added** in `docker-compose.yml` — Envoy depends on `service_healthy`; previously only the Dockerfile had the check, compose did not.
+- **`KC_ISSUER_URL` parameterised** — was hardcoded `http://localhost:8080`; now reads `${KC_ISSUER_URL}` from `.env`. Added `KC_HOSTNAME` to `.env.example`.
+- **TLS private key permissions** — `generate-certs.sh` now sets `chmod 600` on `server.key` (was `644`).
+
+### Fixed (Security — Important)
+
+- **OPA debug image replaced** — `opa:0.64.1-debug` → `opa:0.64.1` (standard image, smaller attack surface).
+- **CSP + Permissions-Policy headers** added to tenant vhost generator (`envoy_add_tenant.py`). Previously only the default vhost had them.
+- **Rate-limiter memory leak fixed** — added periodic cleanup task that removes expired IP entries every 5 minutes to prevent unbounded growth.
+- **Meaningful role differentiation** — `user` role restricted to `GET + POST`; `editor` role gets full CRUD (`GET, POST, PUT, PATCH, DELETE`). Both `permissions.json` and `tenants.json` updated. 4 new OPA tests lock in the distinction.
+- **Template tenant config** — replaced hardcoded `test-tenant` realm with `REPLACE_ME` placeholder.
+
+### Added
+
+- **Server-side logout** — new `POST /api/auth/logout` route in auth-middleware, Envoy, and tenant vhost generator. Revokes Keycloak session server-side.
+- **GitHub Actions CI pipeline** (`.github/workflows/ci.yml`) — runs OPA tests + Docker build verification on every push/PR to `master`.
+- **`--force` flag for `setup_demo.py`** — native Keycloak user deletion is now opt-in (skipped by default) to prevent accidental data loss.
+
+### Changed
+
+- `.env.example` — added `KC_HOSTNAME` and `KC_ISSUER_URL` entries.
+- `policies/authz_test.rego` — 16 → 20 tests (added 4 role differentiation tests); all pass.
+- `docker-compose.yml` — Keycloak environment simplified (DB config moved to command args).
+
+### Tests
+
+- **20/20 OPA policy tests passing** (previously 16).
+
+---
+
 ## [v4.1.0] — Production Hardening & Security Fixes
 
 ### Fixed (Security)

@@ -12,12 +12,12 @@ _perms := {
         "user": {
             "allowed_paths":   ["/api/"],
             "denied_paths":    ["/admin/", "/admin"],
-            "allowed_methods": ["GET", "POST", "DELETE", "PUT", "PATCH"]
+            "allowed_methods": ["GET", "POST"]
         },
         "editor": {
             "allowed_paths":   ["/api/"],
             "denied_paths":    ["/admin/", "/admin"],
-            "allowed_methods": ["GET", "POST", "DELETE", "PUT", "PATCH"]
+            "allowed_methods": ["GET", "POST", "PUT", "PATCH", "DELETE"]
         },
         "viewer": {
             "allowed_paths":   ["/api/"],
@@ -59,8 +59,9 @@ test_user_post_api if {
       with data.permissions as _perms
 }
 
-test_user_delete_own_task if {
-    authz.allow
+# user role should NOT be able to DELETE (only GET + POST)
+test_user_denied_delete_task if {
+    not authz.allow
       with input as {"user": {"id": "u2", "roles": ["user"]},
                      "request": {"method": "DELETE", "path": "/api/tasks/5"}}
       with data.permissions as _perms
@@ -100,6 +101,36 @@ test_viewer_deny_reason if {
     authz.deny_reason == "role does not have permission for this resource"
       with input as {"user": {"id": "u3", "roles": ["viewer"]},
                      "request": {"method": "POST", "path": "/api/tasks"}}
+      with data.permissions as _perms
+}
+
+# ─── editor vs user role differentiation ──────────────────────────────────────
+
+test_editor_can_put if {
+    authz.allow
+      with input as {"user": {"id": "u6", "roles": ["editor"]},
+                     "request": {"method": "PUT", "path": "/api/tasks/1"}}
+      with data.permissions as _perms
+}
+
+test_editor_can_delete if {
+    authz.allow
+      with input as {"user": {"id": "u6", "roles": ["editor"]},
+                     "request": {"method": "DELETE", "path": "/api/tasks/1"}}
+      with data.permissions as _perms
+}
+
+test_user_cannot_put if {
+    not authz.allow
+      with input as {"user": {"id": "u2", "roles": ["user"]},
+                     "request": {"method": "PUT", "path": "/api/tasks/1"}}
+      with data.permissions as _perms
+}
+
+test_user_cannot_patch if {
+    not authz.allow
+      with input as {"user": {"id": "u2", "roles": ["user"]},
+                     "request": {"method": "PATCH", "path": "/api/tasks/1"}}
       with data.permissions as _perms
 }
 

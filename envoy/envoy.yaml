@@ -183,6 +183,18 @@ static_resources:
                             envoy.filters.http.ext_authz:
                               "@type": type.googleapis.com/envoy.extensions.filters.http.ext_authz.v3.ExtAuthzPerRoute
                               disabled: true
+                        # ── Logout: proxy to auth-middleware which revokes the
+                        #    Keycloak session server-side
+                        - match:
+                            path: "/api/auth/logout"
+                          route:
+                            cluster: auth_middleware_cluster
+                            prefix_rewrite: "/logout"
+                            timeout: 10s
+                          typed_per_filter_config:
+                            envoy.filters.http.ext_authz:
+                              "@type": type.googleapis.com/envoy.extensions.filters.http.ext_authz.v3.ExtAuthzPerRoute
+                              disabled: true
                         # ── Everything else: enforce Keycloak JWT via ext_authz
                         - match:
                             prefix: "/"

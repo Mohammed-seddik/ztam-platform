@@ -75,6 +75,25 @@ def _check_rate_limit(client_ip: str) -> bool:
         return True
 
 
+def _cleanup_rate_limiter() -> None:
+    """Remove expired rate-limit entries to prevent unbounded memory growth."""
+    now = time.time()
+    with _rl_lock:
+        expired = [ip for ip, s in _rl_state.items() if now >= s["reset_at"]]
+        for ip in expired:
+            del _rl_state[ip]
+    logger.debug("[rate-limiter] cleanup: removed %d expired entries", len(expired))
+
+
+@app.on_event("startup")
+async def _start_rl_cleanup() -> None:
+    async def _loop():
+        while True:
+            await asyncio.sleep(300)  # every 5 minutes
+            _cleanup_rate_limiter()
+    asyncio.create_task(_loop())
+
+
 # Keycloak internal roles that should never reach OPA or downstream headers
 _KC_INTERNAL_ROLES = frozenset({
     "offline_access",
@@ -229,6 +248,36 @@ async def login_proxy(request: Request):
         status_code=200,
         media_type="application/json",
     )
+
+
+@app.post("/logout")
+async def logout(request: Request) -> Response:
+    """
+    Server-side logout: revokes the Keycloak session so the token
+    is invalidated even before it expires.
+    Called by Envoy for POST /api/auth/logout.
+    """
+    auth_header: str = request.headers.get("authorization", "")
+    if not auth_header.lower().startswith("bearer "):
+        return Response(content='{"error":"missing token"}', status_code=401,
+                        media_type="application/json")
+    token = auth_header[7:]
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            await client.post(
+                f"{KEYCLOAK_URL}/realms/{KC_REALM}/protocol/openid-connect/logout",
+                data={
+                    "client_id":      KC_CLIENT_ID,
+                    "client_secret":  KC_CLIENT_SECRET,
+                    "token_type_hint": "access_token",
+                    "token":          token,
+                },
+            )
+        logger.info("[logout] Keycloak session revoked")
+    except Exception as exc:
+        logger.warning("[logout] Keycloak unreachable: %s", exc)
+    return Response(content='{"message":"logged out"}', status_code=200,
+                    media_type="application/json")
 
 
 @app.api_route(

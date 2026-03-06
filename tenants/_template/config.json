@@ -7,7 +7,7 @@
   "backend_tls": true,
   "hostname": "myapp.yourdomain.com",
   "keycloak_client_id": "REPLACE_ME",
-  "keycloak_realm": "test-tenant",
+  "keycloak_realm": "REPLACE_ME",
   "roles": "admin,user,viewer",
   "created_at": "YYYY-MM-DDT00:00:00Z",
   "notes": "Copy this file to tenants/<name>/config.json or use onboard-tenant.sh to generate it automatically."

@@ -25,6 +25,12 @@ SECURITY_HEADERS = """\
                 key: Referrer-Policy
                 value: "strict-origin-when-cross-origin"
             - header:
+                key: Content-Security-Policy
+                value: "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'"
+            - header:
+                key: Permissions-Policy
+                value: "geolocation=(), microphone=(), camera=(), payment=()"
+            - header:
                 key: Cache-Control
                 value: "no-store"\
 """
@@ -42,6 +48,16 @@ def vhost_snippet(name: str, hostname: str) -> str:
                           route:
                             cluster: auth_middleware_cluster
                             prefix_rewrite: "/login-proxy"
+                            timeout: 10s
+                          typed_per_filter_config:
+                            envoy.filters.http.ext_authz:
+                              "@type": type.googleapis.com/envoy.extensions.filters.http.ext_authz.v3.ExtAuthzPerRoute
+                              disabled: true
+                        - match:
+                            path: "/api/auth/logout"
+                          route:
+                            cluster: auth_middleware_cluster
+                            prefix_rewrite: "/logout"
                             timeout: 10s
                           typed_per_filter_config:
                             envoy.filters.http.ext_authz:

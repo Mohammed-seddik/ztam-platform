@@ -18,23 +18,24 @@ services:
 
   keycloak:
     image: quay.io/keycloak/keycloak:26.5.5
-    command: start-dev
+    command: >
+      start
+      --db=postgres
+      --db-url=jdbc:postgresql://postgres:5432/keycloak
+      --db-username=keycloak
+      --db-password=${PG_PASS}
+      --hostname=${KC_HOSTNAME:-localhost}
+      --hostname-strict=false
+      --http-enabled=true
     volumes:
       - ./keycloak-db-spi/target/keycloak-db-spi.jar:/opt/keycloak/providers/keycloak-db-spi.jar
     environment:
       KEYCLOAK_ADMIN: ${KC_ADMIN_USER:-admin}
       KEYCLOAK_ADMIN_PASSWORD: ${KC_ADMIN_PASS}
-      KC_DB: postgres
-      KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
-      KC_DB_USERNAME: keycloak
-      KC_DB_PASSWORD: ${PG_PASS}
-      KC_HOSTNAME: localhost
-      KC_HOSTNAME_STRICT: "false"
-      KC_HOSTNAME_STRICT_HTTPS: "false"
-    # Port 8080 is kept for admin console access.
-    # In production: restrict with firewall rules or put behind Envoy.
+      KC_HOSTNAME: ${KC_HOSTNAME:-localhost}
+    # Admin console — bound to localhost only. Use SSH tunnel or firewall for remote access.
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     networks: [ztam]
     restart: unless-stopped
     depends_on:
@@ -48,7 +49,7 @@ services:
       start_period: 60s
 
   opa:
-    image: openpolicyagent/opa:0.64.1-debug
+    image: openpolicyagent/opa:0.64.1
     command: run --server --addr 0.0.0.0:8181 --watch /policies --ignore '*_test.rego'
     volumes:
       - ./policies:/policies:ro
@@ -68,7 +69,7 @@ services:
       KEYCLOAK_URL: http://keycloak:8080
       # KC_ISSUER_URL: the public-facing URL Keycloak stamps in JWT iss claims.
       # Must match KC_HOSTNAME in the keycloak service (defaults to localhost).
-      KC_ISSUER_URL: http://localhost:8080
+      KC_ISSUER_URL: ${KC_ISSUER_URL:-http://localhost:8080}
       KC_REALM: ${KC_REALM}
       KC_CLIENT_ID: ${KC_CLIENT_ID:-test-app}
       KC_CLIENT_SECRET: ${KC_CLIENT_SECRET}
@@ -78,6 +79,12 @@ services:
     # Exposing this port would allow bypassing the policy engine entirely.
     networks: [ztam]
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8001/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
     depends_on:
       keycloak:
         condition: service_healthy
