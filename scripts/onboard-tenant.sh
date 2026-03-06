@@ -27,20 +27,30 @@ TENANT_NAME=""
 BACKEND_URL=""
 HOSTNAME_FQDN=""
 ROLES="admin,user,viewer"
+LOGIN_MODE="form"
+NO_SPI="false"
 
 # ── Parse args ────────────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
     case $1 in
-        --name)      TENANT_NAME="$2"; shift 2 ;;
-        --backend)   BACKEND_URL="$2"; shift 2 ;;
-        --hostname)  HOSTNAME_FQDN="$2"; shift 2 ;;
-        --roles)     ROLES="$2"; shift 2 ;;
+        --name)       TENANT_NAME="$2"; shift 2 ;;
+        --backend)    BACKEND_URL="$2"; shift 2 ;;
+        --hostname)   HOSTNAME_FQDN="$2"; shift 2 ;;
+        --roles)      ROLES="$2"; shift 2 ;;
+        --login-mode) LOGIN_MODE="$2"; shift 2 ;;
+        --no-spi)     NO_SPI="true"; shift ;;
         -h|--help)
-            grep '^#' "$0" | head -20 | sed 's/^# \?//'
+            grep '^#' "$0" | head -25 | sed 's/^# \?//'
             exit 0 ;;
         *) echo "Unknown arg: $1 (use --help for usage)"; exit 1 ;;
     esac
 done
+
+# Validate login-mode
+if [[ "$LOGIN_MODE" != "form" && "$LOGIN_MODE" != "keycloak" ]]; then
+    echo "ERROR: --login-mode must be 'form' or 'keycloak'"
+    exit 1
+fi
 
 # ── Validate required args ────────────────────────────────────────────────────
 [[ -z "$TENANT_NAME" ]]   && { echo "ERROR: --name is required";     exit 1; }
@@ -57,9 +67,11 @@ echo ""
 echo "══════════════════════════════════════════════════════════════════════"
 echo "  ZTAM Tenant Onboarding: $TENANT_NAME"
 echo "══════════════════════════════════════════════════════════════════════"
-echo "  Backend:  $BACKEND_URL"
-echo "  Hostname: $HOSTNAME_FQDN"
-echo "  Roles:    $ROLES"
+echo "  Backend:    $BACKEND_URL"
+echo "  Hostname:   $HOSTNAME_FQDN"
+echo "  Roles:      $ROLES"
+echo "  Login Mode: $LOGIN_MODE"
+echo "  No-SPI:     $NO_SPI"
 echo ""
 
 # ── Load .env ─────────────────────────────────────────────────────────────────
@@ -109,7 +121,14 @@ HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
       \"publicClient\": false,
       \"directAccessGrantsEnabled\": true,
       \"standardFlowEnabled\": true,
-      \"secret\": \"${CLIENT_SECRET}\"
+      \"secret\": \"${CLIENT_SECRET}\",
+      \"rootUrl\": \"https://${HOSTNAME_FQDN}\",
+      \"baseUrl\": \"/\",
+      \"redirectUris\": [
+        \"https://${HOSTNAME_FQDN}/*\",
+        \"${ZTAM_PUBLIC_URL:-https://localhost}/api/auth/callback\"
+      ],
+      \"webOrigins\": [\"*\"]
     }")
 
 if [[ "$HTTP_STATUS" == "409" ]]; then
@@ -117,6 +136,13 @@ if [[ "$HTTP_STATUS" == "409" ]]; then
 elif [[ "$HTTP_STATUS" == "201" ]]; then
     echo "   ✓ Client '${TENANT_NAME}' created (secret: ${CLIENT_SECRET})"
     echo "   ⚠  Save this client secret — it will not be shown again"
+    
+    # If no-spi is NOT set, we associate the client with the common user-federation
+    if [[ "$NO_SPI" == "false" ]]; then
+        echo "   (SPI mode enabled: users will be served from external DB)"
+        # Note: Linking to SPI usually happens at the realm level or via mappers.
+        # onboard-tenant.sh currently assumes the realm is already configured with the SPI.
+    fi
 else
     echo "   ERROR: Keycloak client creation returned HTTP ${HTTP_STATUS}"
     exit 1
@@ -175,6 +201,8 @@ cat > "$ROOT_DIR/tenants/${TENANT_NAME}/config.json" <<JSONEOF
   "keycloak_client_id": "${TENANT_NAME}",
   "keycloak_realm": "${KC_REALM}",
   "roles": "${ROLES}",
+  "login_mode": "${LOGIN_MODE}",
+  "no_spi": ${NO_SPI},
   "created_at": "${NOW}"
 }
 JSONEOF
@@ -188,6 +216,7 @@ python3 "$SCRIPT_DIR/envoy_add_tenant.py" \
     --backend-host "${BACKEND_HOST}" \
     --backend-port "${BACKEND_PORT}" \
     --backend-tls  "${BACKEND_TLS}" \
+    --login-mode   "${LOGIN_MODE}" \
     --envoy-yaml   "$ROOT_DIR/envoy/envoy.yaml"
 
 echo ""

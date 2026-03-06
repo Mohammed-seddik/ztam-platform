@@ -36,13 +36,26 @@ SECURITY_HEADERS = """\
 """
 
 
-def vhost_snippet(name: str, hostname: str) -> str:
-    return f"""\
-                    # ── Tenant: {name} ─────────────────────────────────────
-                    - name: {name}_vhost
-                      domains: ["{hostname}"]
-{SECURITY_HEADERS}
-                      routes:
+def vhost_snippet(name: str, hostname: str, login_mode: str = "form") -> str:
+    routes = ""
+    
+    if login_mode == "keycloak":
+        # Redirect unauthenticated requests to the ZTAM login-redirect endpoint
+        # which will then send them to Keycloak.
+        routes += f"""\
+                        - match:
+                            prefix: "/"
+                          route:
+                            cluster: auth_middleware_cluster
+                            prefix_rewrite: "/login-redirect?tenant={name}&redirect_uri="
+                            timeout: 5s
+                          typed_per_filter_config:
+                            envoy.filters.http.ext_authz:
+                              "@type": type.googleapis.com/envoy.extensions.filters.http.ext_authz.v3.ExtAuthzPerRoute
+                              disabled: true
+"""
+    
+    routes += f"""\
                         - match:
                             path: "/api/auth/login"
                           route:
@@ -69,6 +82,15 @@ def vhost_snippet(name: str, hostname: str) -> str:
                             cluster: {name}_cluster
                             timeout: 30s
 
+"""
+
+    return f"""\
+                    # ── Tenant: {name} ({login_mode} mode) ────────────────────
+                    - name: {name}_vhost
+                      domains: ["{hostname}"]
+{SECURITY_HEADERS}
+                      routes:
+{routes}
 """
 
 

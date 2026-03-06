@@ -77,7 +77,9 @@ Each client gets their own:
   --name     myapp                         \
   --backend  https://myapp.railway.app     \
   --hostname myapp.yourdomain.com          \
-  --roles    "admin,manager,user,viewer"
+  --roles    "admin,manager,user,viewer"   \
+  --login-mode keycloak                    \ # Optional: keycloak | form (default)
+  --no-spi                                   # Optional: skip external DB
 ```
 
 That's it. The script:

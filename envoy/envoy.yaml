@@ -173,6 +173,25 @@ static_resources:
                             envoy.filters.http.ext_authz:
                               "@type": type.googleapis.com/envoy.extensions.filters.http.ext_authz.v3.ExtAuthzPerRoute
                               disabled: true
+                        # ── Keycloak Identity Flow (OAuth2) ──
+                        - match:
+                            path: "/api/auth/login-redirect"
+                          route:
+                            cluster: auth_middleware_cluster
+                            prefix_rewrite: "/login-redirect"
+                          typed_per_filter_config:
+                            envoy.filters.http.ext_authz:
+                              "@type": type.googleapis.com/envoy.extensions.filters.http.ext_authz.v3.ExtAuthzPerRoute
+                              disabled: true
+                        - match:
+                            path: "/api/auth/callback"
+                          route:
+                            cluster: auth_middleware_cluster
+                            prefix_rewrite: "/auth/callback"
+                          typed_per_filter_config:
+                            envoy.filters.http.ext_authz:
+                              "@type": type.googleapis.com/envoy.extensions.filters.http.ext_authz.v3.ExtAuthzPerRoute
+                              disabled: true
                         # ── Register: pass through directly (no auth needed)
                         - match:
                             path: "/api/auth/register"

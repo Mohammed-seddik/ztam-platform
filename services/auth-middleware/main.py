@@ -33,9 +33,17 @@ TESTAPP_JWT_SECRET: Optional[str] = os.getenv("TESTAPP_JWT_SECRET")
 # Keycloak is configured with KC_HOSTNAME pointing to the public host.
 KC_ISSUER_URL: str = os.getenv("KC_ISSUER_URL", KEYCLOAK_URL)
 
+# Public URL used in redirects back to the browser (FQDN of the ZTAM gateway)
+ZTAM_PUBLIC_URL: str = os.getenv("ZTAM_PUBLIC_URL", "https://localhost")
+
 JWKS_URI: str = f"{KEYCLOAK_URL}/realms/{KC_REALM}/protocol/openid-connect/certs"
 KC_TOKEN_URI: str = f"{KEYCLOAK_URL}/realms/{KC_REALM}/protocol/openid-connect/token"
 EXPECTED_ISSUER: str = f"{KC_ISSUER_URL}/realms/{KC_REALM}"
+
+# Cookie settings
+AUTH_COOKIE_NAME = "ztam_auth"
+AUTH_COOKIE_SECURE = os.getenv("AUTH_COOKIE_SECURE", "true").lower() == "true"
+AUTH_COOKIE_SAMESITE = os.getenv("AUTH_COOKIE_SAMESITE", "lax")
 
 # ─── JWKS in-memory cache with asyncio lock (prevents thundering herd) ───────
 _jwks_cache: dict = {}
@@ -280,6 +288,69 @@ async def logout(request: Request) -> Response:
                     media_type="application/json")
 
 
+@app.get("/login-redirect")
+async def login_redirect(tenant: str, redirect_uri: str = "/") -> Response:
+    """
+    Redirects the browser to Keycloak's login page for a specific tenant.
+    Called by Envoy when a user hits a 'keycloak' login-mode tenant without a token.
+    """
+    # Use the tenant name as the client_id
+    scoped_auth_uri = (
+        f"{KC_ISSUER_URL}/realms/{KC_REALM}/protocol/openid-connect/auth"
+        f"?client_id={tenant}"
+        f"&response_type=code"
+        f"&scope=openid profile email"
+        f"&redirect_uri={ZTAM_PUBLIC_URL}/api/auth/callback"
+        f"&state={redirect_uri}"
+    )
+    return Response(status_code=302, headers={"Location": scoped_auth_uri})
+
+
+@app.get("/auth/callback")
+async def auth_callback(code: str, state: str = "/", tenant: str = None) -> Response:
+    """
+    OAuth2 callback: exchanges authorization code for a token,
+    sets a secure cookie, and redirects back to the original app page.
+    """
+    # Note: If tenant is not passed in query, we can try to extract it from state or config.
+    # For now, we'll assume the client_id is the default unless specified.
+    client_id = tenant if tenant else KC_CLIENT_ID
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                KC_TOKEN_URI,
+                data={
+                    "grant_type":    "authorization_code",
+                    "client_id":     client_id,
+                    "client_secret": KC_CLIENT_SECRET,
+                    "code":          code,
+                    "redirect_uri":  f"{ZTAM_PUBLIC_URL}/api/auth/callback",
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            access_token = data["access_token"]
+
+            # Redirect back to the original page (stored in state)
+            response = Response(status_code=302, headers={"Location": state})
+            
+            # Set secure HttpOnly cookie
+            response.set_cookie(
+                key=AUTH_COOKIE_NAME,
+                value=access_token,
+                httponly=True,
+                secure=AUTH_COOKIE_SECURE,
+                samesite=AUTH_COOKIE_SAMESITE,
+                max_age=data.get("expires_in", 3600),
+            )
+            return response
+    except Exception as exc:
+        logger.error("[callback] Token exchange failed: %s", exc)
+        return Response(content='{"error":"authentication failed"}',
+                        status_code=500, media_type="application/json")
+
+
 @app.api_route(
     "/{full_path:path}",
     methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"],
@@ -295,17 +366,23 @@ async def check(request: Request, full_path: str = ""):
     if request.method == "OPTIONS":
         return Response(status_code=200)
 
-    # ---------- 1. Extract Bearer token --------------------------------------
+    # ---------- 1. Extract Bearer token (Header or Cookie) ------------------
     auth_header: str = request.headers.get("authorization", "")
-    if not auth_header.lower().startswith("bearer "):
-        logger.warning("Missing or non-Bearer Authorization header")
+    token: Optional[str] = None
+
+    if auth_header.lower().startswith("bearer "):
+        token = auth_header[7:]
+    else:
+        # Fallback to cookie for 'keycloak' login mode
+        token = request.cookies.get(AUTH_COOKIE_NAME)
+
+    if not token:
+        logger.warning("Missing token in both Authorization header and cookie")
         return Response(
             content='{"error":"missing token"}',
             status_code=401,
             media_type="application/json",
         )
-
-    token = auth_header[7:]  # always 7 chars: "bearer "
 
     # ---------- 2 & 3. Fetch JWKS (cached, lock-protected) ------------------
     try:

@@ -38,7 +38,8 @@ HTTP :80 → 301 redirect → HTTPS :443
 ## Prerequisites
 
 - Docker + Docker Compose v2
-- Maven 3.9+ with JDK 17+ — needed once to build the Keycloak SPI JAR
+- Maven 3.9+ with JDK 17+ — (Optional) needed only if you use the Keycloak MySQL SPI
+- Python 3.9+ (on the host) — for onboarding scripts
 - ~4 GB RAM available to Docker
 
 ---
@@ -137,6 +138,43 @@ All users live in TestApp's MySQL DB. Keycloak reads and authenticates them via 
 | `demouser` | `demo123`   | **admin** | All tasks from all users |
 
 ---
+
+## Multi-Client Onboarding
+
+ZTAM is designed for multi-tenancy. You can onboard any number of client applications in seconds.
+
+### Case A: App with its own Login Page
+Uses the **Form Login Mode** (default). ZTAM intercepts the login POST and translates it to Keycloak.
+
+```bash
+./scripts/onboard-tenant.sh \
+  --name myapp \
+  --backend https://myapp.internal \
+  --hostname myapp.yourdomain.com
+```
+
+### Case B: App with NO Login Page
+Uses the **Keycloak Login Mode**. Unauthenticated users are redirected to Keycloak's own login UI.
+
+```bash
+./scripts/onboard-tenant.sh \
+  --name legacy-app \
+  --backend http://10.0.0.5:8080 \
+  --hostname legacy.yourdomain.com \
+  --login-mode keycloak \
+  --no-spi
+```
+
+### Offboarding a Tenant
+```bash
+./scripts/offboard-tenant.sh --name myapp
+```
+
+---
+
+## Production Deployment
+
+For full production setup instructions (TLS via Let's Encrypt, DNS, Hardening), see [DEPLOYMENT.md](DEPLOYMENT.md).
 
 ## Exposed Ports
 
