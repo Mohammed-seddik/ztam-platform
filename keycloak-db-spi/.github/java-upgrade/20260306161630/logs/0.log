@@ -218,3 +218,134 @@
   "message": "Event 'environmentSetup' reported!\nSession ID: 20260306161630,\nSession Dir: /home/mohammed-seddik/PFE Folder/ztam-platform/keycloak-db-spi/.github/java-upgrade/20260306161630"
 }}).
 2026-03-06T16:21:00.974Z [INFO] ----------------------invoked report_event----------------------
+2026-03-06T16:21:38.591Z [INFO] ---------------------prepare report_event----------------------
+2026-03-06T16:21:38.591Z [INFO] [Tool.prepareInvocation]({name: report_event, input: {
+  "event": "baselineSetup",
+  "phase": "execute",
+  "projectPath": "/home/mohammed-seddik/PFE Folder/ztam-platform/keycloak-db-spi",
+  "sessionId": "20260306161630",
+  "status": "succeeded"
+}}).
+2026-03-06T16:21:38.591Z [INFO] [Tool.prepareInvocation] do prepare invocation.
+2026-03-06T16:21:38.591Z [INFO] [Tool.prepareInvocation]({result: {
+  "invocationMessage": "Report upgrade event"
+}}).
+2026-03-06T16:21:38.591Z [INFO] ----------------------prepared report_event----------------------
+2026-03-06T16:21:38.629Z [INFO] ----------------------invoke report_event----------------------
+2026-03-06T16:21:38.629Z [INFO] [Tool.invoke]({name: report_event, input: {
+  "event": "baselineSetup",
+  "phase": "execute",
+  "projectPath": "/home/mohammed-seddik/PFE Folder/ztam-platform/keycloak-db-spi",
+  "sessionId": "20260306161630",
+  "status": "succeeded"
+}}).
+2026-03-06T16:21:38.629Z [INFO] [Tool.invoke] do invoke.
+2026-03-06T16:21:38.629Z [INFO] [Tool.invoke]({result: {
+  "message": "Event 'baselineSetup' reported!\nSession ID: 20260306161630,\nSession Dir: /home/mohammed-seddik/PFE Folder/ztam-platform/keycloak-db-spi/.github/java-upgrade/20260306161630"
+}}).
+2026-03-06T16:21:38.629Z [INFO] ----------------------invoked report_event----------------------
+2026-03-06T16:24:51.590Z [INFO] ---------------------prepare report_event----------------------
+2026-03-06T16:24:51.590Z [INFO] [Tool.prepareInvocation]({name: report_event, input: {
+  "details": {
+    "stepNumber": 3,
+    "stepTitle": "Upgrade Java Version in POM"
+  },
+  "event": "upgradeStepStarted",
+  "phase": "execute",
+  "projectPath": "/home/mohammed-seddik/PFE Folder/ztam-platform/keycloak-db-spi",
+  "sessionId": "20260306161630",
+  "status": "succeeded"
+}}).
+2026-03-06T16:24:51.590Z [INFO] [Tool.prepareInvocation] do prepare invocation.
+2026-03-06T16:24:51.590Z [INFO] [Tool.prepareInvocation]({result: {
+  "invocationMessage": "Report upgrade event"
+}}).
+2026-03-06T16:24:51.590Z [INFO] ----------------------prepared report_event----------------------
+2026-03-06T16:24:51.614Z [INFO] ----------------------invoke report_event----------------------
+2026-03-06T16:24:51.614Z [INFO] [Tool.invoke]({name: report_event, input: {
+  "details": {
+    "stepNumber": 3,
+    "stepTitle": "Upgrade Java Version in POM"
+  },
+  "event": "upgradeStepStarted",
+  "phase": "execute",
+  "projectPath": "/home/mohammed-seddik/PFE Folder/ztam-platform/keycloak-db-spi",
+  "sessionId": "20260306161630",
+  "status": "succeeded"
+}}).
+2026-03-06T16:24:51.614Z [INFO] [Tool.invoke] do invoke.
+2026-03-06T16:24:51.614Z [INFO] [Tool.invoke]({result: {
+  "message": "Event 'upgradeStepStarted' reported!\nSession ID: 20260306161630,\nSession Dir: /home/mohammed-seddik/PFE Folder/ztam-platform/keycloak-db-spi/.github/java-upgrade/20260306161630"
+}}).
+2026-03-06T16:24:51.614Z [INFO] ----------------------invoked report_event----------------------
+2026-03-06T16:26:38.455Z [INFO] ---------------------prepare report_event----------------------
+2026-03-06T16:26:38.455Z [INFO] [Tool.prepareInvocation]({name: report_event, input: {
+  "event": "buildCompleted",
+  "phase": "execute",
+  "projectPath": "/home/mohammed-seddik/PFE Folder/ztam-platform/keycloak-db-spi",
+  "sessionId": "20260306161630",
+  "status": "succeeded"
+}}).
+2026-03-06T16:26:38.455Z [INFO] [Tool.prepareInvocation] do prepare invocation.
+2026-03-06T16:26:38.455Z [INFO] [Tool.prepareInvocation]({result: {
+  "invocationMessage": "Report upgrade event"
+}}).
+2026-03-06T16:26:38.455Z [INFO] ----------------------prepared report_event----------------------
+2026-03-06T16:26:38.485Z [INFO] ----------------------invoke report_event----------------------
+2026-03-06T16:26:38.485Z [INFO] [Tool.invoke]({name: report_event, input: {
+  "event": "buildCompleted",
+  "phase": "execute",
+  "projectPath": "/home/mohammed-seddik/PFE Folder/ztam-platform/keycloak-db-spi",
+  "sessionId": "20260306161630",
+  "status": "succeeded"
+}}).
+2026-03-06T16:26:38.485Z [INFO] [Tool.invoke] do invoke.
+2026-03-06T16:26:38.485Z [INFO] Project /home/mohammed-seddik/PFE Folder/ztam-platform/keycloak-db-spi is a maven project, try to get java version from pom.xml
+2026-03-06T16:26:38.486Z [INFO] Project java version: 21
+2026-03-06T16:26:38.486Z [INFO] Maven project detected.
+2026-03-06T16:26:38.486Z [INFO] Build tool type: mvn
+2026-03-06T16:26:38.490Z [INFO] JDK: {
+  "name": "java",
+  "path": "/usr/lib/jvm/java-21-openjdk-amd64/bin",
+  "version": "21"
+}
+2026-03-06T16:26:38.492Z [INFO] Build tool: {
+  "name": "mvn",
+  "path": "/home/mohammed-seddik/.maven/maven-3.9.13/bin",
+  "version": "",
+  "source": "install"
+}
+2026-03-06T16:26:38.492Z [INFO] Project config: {
+  "buildTool": {
+    "path": "/home/mohammed-seddik/.maven/maven-3.9.13/bin",
+    "name": "mvn",
+    "version": "",
+    "source": "install"
+  },
+  "jdk": {
+    "path": "/usr/lib/jvm/java-21-openjdk-amd64/bin",
+    "name": "java",
+    "version": "21"
+  },
+  "name": "keycloak-db-spi",
+  "dir": "/home/mohammed-seddik/PFE Folder/ztam-platform/keycloak-db-spi"
+}
+2026-03-06T16:26:38.492Z [INFO] [MavenBuildTool] Getting all module coordinates of /home/mohammed-seddik/PFE Folder/ztam-platform/keycloak-db-spi
+2026-03-06T16:26:38.492Z [INFO] [MavenBuildTool] Getting effective POMs of /home/mohammed-seddik/PFE Folder/ztam-platform/keycloak-db-spi
+2026-03-06T16:26:38.492Z [INFO] [Environment] Running command (Java undefined): mvn help:effective-pom -Doutput=effective-pom-89c5fcee-ab81-4ce9-9529-10ad5967a8aa.log
+/bin/sh: 1: mvn: not found
+2026-03-06T16:26:38.503Z [INFO] [MavenBuildTool] Failed to get effective POMs: Error: ENOENT: no such file or directory, open '/home/mohammed-seddik/PFE Folder/ztam-platform/keycloak-db-spi/effective-pom-89c5fcee-ab81-4ce9-9529-10ad5967a8aa.log'
+2026-03-06T16:26:38.504Z [INFO] [BaseBuildTool] Found 0 modules: 
+2026-03-06T16:26:38.504Z [INFO] [BaseBuildTool] Finish counting Java and class files
+2026-03-06T16:26:38.504Z [INFO] [MavenBuildTool] Cleaning /home/mohammed-seddik/PFE Folder/ztam-platform/keycloak-db-spi using Maven
+2026-03-06T16:26:38.504Z [INFO] [Environment] Running command (Java undefined): mvn clean -q -B -fn
+/bin/sh: 1: mvn: not found
+2026-03-06T16:26:38.516Z [INFO] [MavenBuildTool] Getting all module coordinates of /home/mohammed-seddik/PFE Folder/ztam-platform/keycloak-db-spi
+2026-03-06T16:26:38.516Z [INFO] [MavenBuildTool] Getting effective POMs of /home/mohammed-seddik/PFE Folder/ztam-platform/keycloak-db-spi
+2026-03-06T16:26:38.516Z [INFO] [Environment] Running command (Java undefined): mvn help:effective-pom -Doutput=effective-pom-4f093d34-dde6-4320-8a82-fa8c6eaf49ca.log
+/bin/sh: 1: mvn: not found
+2026-03-06T16:26:38.526Z [INFO] [MavenBuildTool] Failed to get effective POMs: Error: ENOENT: no such file or directory, open '/home/mohammed-seddik/PFE Folder/ztam-platform/keycloak-db-spi/effective-pom-4f093d34-dde6-4320-8a82-fa8c6eaf49ca.log'
+2026-03-06T16:26:38.526Z [INFO] [Tool.invoke]({result: {
+  "message": "Event 'buildCompleted' reported!\nSession ID: 20260306161630,\nSession Dir: /home/mohammed-seddik/PFE Folder/ztam-platform/keycloak-db-spi/.github/java-upgrade/20260306161630"
+}}).
+2026-03-06T16:26:38.526Z [INFO] ----------------------invoked report_event----------------------
