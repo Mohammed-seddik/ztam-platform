@@ -44,37 +44,5 @@
         ]
       }
     }
-  },
-  "test-store": {
-    "roles": {
-      "manager": {
-        "allowed_paths": [
-          "/api/"
-        ],
-        "denied_paths": [
-          "/admin/"
-        ],
-        "allowed_methods": [
-          "GET",
-          "POST",
-          "PUT",
-          "PATCH",
-          "DELETE"
-        ]
-      },
-      "customer": {
-        "allowed_paths": [
-          "/api/"
-        ],
-        "denied_paths": [
-          "/admin/",
-          "/admin"
-        ],
-        "allowed_methods": [
-          "GET",
-          "POST"
-        ]
-      }
-    }
   }
 }
