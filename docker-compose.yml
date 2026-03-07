@@ -58,9 +58,9 @@ services:
     networks: [ztam]
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8181/health || exit 1"]
-      interval: 5s
-      timeout: 3s
+      test: ["CMD", "/opa", "eval", "--fail-defined", "data.authz"]
+      interval: 10s
+      timeout: 5s
       retries: 5
 
   auth-middleware:
