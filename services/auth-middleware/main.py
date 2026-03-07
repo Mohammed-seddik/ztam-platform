@@ -52,15 +52,11 @@ _jwks_lock = asyncio.Lock()
 JWKS_TTL: int = 300  # seconds
 
 # ─── Startup validation — crash immediately if required secrets are empty ─────
-for _secret_name, _secret_val in (
-    ("KC_CLIENT_SECRET", KC_CLIENT_SECRET),
-    ("TESTAPP_JWT_SECRET", TESTAPP_JWT_SECRET or ""),
-):
-    if not _secret_val:
-        raise RuntimeError(
-            f"FATAL: required environment variable {_secret_name!r} is not set. "
-            "Refusing to start."
-        )
+if not KC_CLIENT_SECRET:
+    raise RuntimeError(
+        "FATAL: required environment variable 'KC_CLIENT_SECRET' is not set. "
+        "Refusing to start."
+    )
 
 # ─── In-memory login rate limiter (per source IP) ─────────────────────────────
 _rl_lock = threading.Lock()
@@ -163,9 +159,223 @@ def extract_roles(claims: dict) -> list[str]:
 
 # ─── Endpoints ───────────────────────────────────────────────────────────────
 
+# ─── ZTAM Platform Login Page (served directly by auth-middleware) ──────────
+# This page is routed at /ztam/login on every ZTAM virtual host.
+# Clients never need their own login page — the platform handles it.
+_ZTAM_LOGIN_HTML = """\
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ZTAM — Sign in</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0 }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #0f172a; min-height: 100vh;
+      display: flex; align-items: center; justify-content: center; }
+    .card { background: #1e293b; border: 1px solid #334155; border-radius: 12px;
+      padding: 2.5rem 2rem; width: 100%; max-width: 380px; }
+    .logo { display: flex; align-items: center; gap: 10px; margin-bottom: 2rem }
+    .logo-icon { width: 36px; height: 36px;
+      background: linear-gradient(135deg, #3b82f6, #1d4ed8);
+      border-radius: 8px; display: flex; align-items: center;
+      justify-content: center; color: #fff; font-weight: 800; font-size: 16px }
+    .logo-text { color: #64748b; font-size: 12px }
+    .logo-text strong { color: #e2e8f0; display: block; font-size: 14px }
+    h1 { color: #f1f5f9; font-size: 1.35rem; font-weight: 600; margin-bottom: .25rem }
+    .subtitle { color: #94a3b8; font-size: .875rem; margin-bottom: 1.75rem }
+    .subtitle span { color: #60a5fa; font-weight: 500 }
+    .field { margin-bottom: 1rem }
+    label { display: block; color: #64748b; font-size: .75rem; font-weight: 600;
+      text-transform: uppercase; letter-spacing: .06em; margin-bottom: .35rem }
+    input { width: 100%; background: #0f172a; border: 1px solid #334155;
+      border-radius: 8px; padding: .65rem .9rem; color: #e2e8f0;
+      font-size: .95rem; outline: none; transition: border-color .15s }
+    input:focus { border-color: #3b82f6 }
+    button { width: 100%; background: #2563eb; color: #fff; border: none;
+      border-radius: 8px; padding: .7rem; font-size: .95rem; font-weight: 600;
+      cursor: pointer; margin-top: .5rem; transition: background .15s }
+    button:hover:not(:disabled) { background: #1d4ed8 }
+    button:disabled { opacity: .55; cursor: default }
+    .error { background: #450a0a; border: 1px solid #7f1d1d; color: #fca5a5;
+      border-radius: 8px; padding: .6rem .85rem; font-size: .875rem;
+      margin-bottom: 1rem; display: none }
+    .footer { color: #334155; font-size: .7rem; text-align: center; margin-top: 1.5rem }
+  </style>
+</head>
+<body><div class="card">
+  <div class="logo">
+    <div class="logo-icon">Z</div>
+    <div class="logo-text"><strong>Zero-Trust Access</strong>Secured by ZTAM</div>
+  </div>
+  <h1>Sign in</h1>
+  <p class="subtitle">Access to <span id="tl">this resource</span> is protected</p>
+  <div class="error" id="err"></div>
+  <form id="f">
+    <div class="field">
+      <label>Username</label>
+      <input id="u" type="text" name="username" autocomplete="username" autofocus required>
+    </div>
+    <div class="field">
+      <label>Password</label>
+      <input id="p" type="password" name="password" autocomplete="current-password" required>
+    </div>
+    <button id="btn" type="submit">Sign in</button>
+  </form>
+  <p class="footer">&#128274; All access is verified, logged and zero-trust enforced</p>
+</div><script>
+(function() {
+  var next = new URLSearchParams(window.location.search).get('next') || '/';
+  var t = window.location.hostname.split('.')[0];
+  if (t && t !== 'localhost') document.getElementById('tl').textContent = t;
+  document.getElementById('f').addEventListener('submit', function(e) {
+    e.preventDefault();
+    var btn = document.getElementById('btn');
+    var err = document.getElementById('err');
+    btn.disabled = true; btn.textContent = 'Signing in\u2026'; err.style.display = 'none';
+    fetch('/ztam/login', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        username: document.getElementById('u').value.trim(),
+        password: document.getElementById('p').value,
+        next: next
+      })
+    })
+    .then(function(r) { return r.json().then(function(d) { return {ok: r.ok, d: d}; }); })
+    .then(function(res) {
+      if (!res.ok) throw new Error(res.d.error || 'Login failed');
+      window.location.href = res.d.redirect || next;
+    })
+    .catch(function(e) {
+      err.textContent = e.message; err.style.display = 'block';
+      btn.disabled = false; btn.textContent = 'Sign in';
+    });
+  });
+})();
+</script></body></html>
+"""
+
+_ZTAM_DENIED_HTML = """\
+<!DOCTYPE html><html lang="en"><head>
+  <meta charset="UTF-8"><title>ZTAM — Access Denied</title>
+  <style>
+    body { font-family: system-ui, sans-serif; background: #0f172a; color: #e2e8f0;
+      min-height: 100vh; display: flex; align-items: center; justify-content: center; }
+    .card { background: #1e293b; border: 1px solid #7f1d1d; border-radius: 12px;
+      padding: 2.5rem; text-align: center; max-width: 400px; }
+    h1 { font-size: 3rem; margin-bottom: .5rem }
+    h2 { color: #f43f5e; margin-bottom: 1rem }
+    p { color: #94a3b8; margin-bottom: 1.5rem; font-size: .9rem }
+    a { color: #3b82f6; text-decoration: none; font-size: .9rem }
+  </style>
+</head><body><div class="card">
+  <h1>&#128274;</h1>
+  <h2>Access Denied</h2>
+  <p>Your role does not permit access to this resource.</p>
+  <a href="/ztam/login">&#8592; Sign in with a different account</a>
+</div></body></html>
+"""
+
+
 @app.get("/health")
 async def health():
     return {"status": "ok"}
+
+
+@app.get("/ztam/login")
+async def ztam_login_page(next: str = "/") -> Response:
+    """Serve the ZTAM platform login page. Linked to by auth redirects."""
+    return Response(content=_ZTAM_LOGIN_HTML, media_type="text/html")
+
+
+@app.post("/ztam/login")
+async def ztam_login_post(request: Request) -> Response:
+    """
+    Platform login handler: authenticates via Keycloak and sets a secure
+    HttpOnly cookie so every subsequent Envoy ext_authz check passes without
+    any client-side token management.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return Response(content='{"error":"invalid request body"}',
+                        status_code=400, media_type="application/json")
+
+    username: str = body.get("username", "").strip()
+    password: str = body.get("password", "")
+    next_url: str = body.get("next", "/")
+
+    # Prevent open redirect: only allow relative same-origin paths
+    if not next_url.startswith("/") or "//" in next_url:
+        next_url = "/"
+
+    if not username or not password:
+        return Response(content='{"error":"Username and password are required"}',
+                        status_code=400, media_type="application/json")
+    if len(username) > 200 or len(password) > 1000:
+        return Response(content='{"error":"Invalid credentials"}',
+                        status_code=400, media_type="application/json")
+
+    client_ip: str = request.client.host if request.client else "unknown"
+    if not _check_rate_limit(client_ip):
+        logger.warning("[ztam-login] Rate limit hit for IP %s", client_ip)
+        return Response(content='{"error":"Too many login attempts, please try again later"}',
+                        status_code=429, media_type="application/json")
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            kc_resp = await client.post(
+                KC_TOKEN_URI,
+                data={
+                    "grant_type":   "password",
+                    "client_id":    KC_CLIENT_ID,
+                    "client_secret": KC_CLIENT_SECRET,
+                    "username":     username,
+                    "password":     password,
+                },
+            )
+    except Exception as exc:
+        logger.error("[ztam-login] Keycloak unreachable: %s", exc)
+        return Response(content='{"error":"Auth service unavailable"}',
+                        status_code=503, media_type="application/json")
+
+    if kc_resp.status_code != 200:
+        logger.warning("[ztam-login] Failed login for user=%s", username)
+        return Response(content='{"error":"Invalid credentials"}',
+                        status_code=401, media_type="application/json")
+
+    kc_data = kc_resp.json()
+    kc_token: str = kc_data["access_token"]
+    expires_in: int = kc_data.get("expires_in", 3600)
+
+    try:
+        claims = jwt.get_unverified_claims(kc_token)
+    except JWTError as exc:
+        logger.error("[ztam-login] Could not decode token: %s", exc)
+        return Response(content='{"error":"Auth service error"}',
+                        status_code=500, media_type="application/json")
+
+    role: str = claims.get("role") or "viewer"
+    uname: str = claims.get("preferred_username", username)
+    logger.info("[ztam-login] Authenticated user=%s role=%s", uname, role)
+
+    resp = Response(
+        content=json.dumps({"redirect": next_url, "username": uname, "role": role}),
+        status_code=200,
+        media_type="application/json",
+    )
+    resp.set_cookie(
+        key=AUTH_COOKIE_NAME,
+        value=kc_token,
+        httponly=True,
+        secure=AUTH_COOKIE_SECURE,
+        samesite=AUTH_COOKIE_SAMESITE,
+        max_age=expires_in,
+        path="/",
+    )
+    return resp
 
 
 @app.post("/login-proxy")
@@ -366,18 +576,30 @@ async def check(request: Request, full_path: str = ""):
     if request.method == "OPTIONS":
         return Response(status_code=200)
 
-    # ---------- 1. Extract Bearer token (Header or Cookie) ------------------
+    # ---------- 1. Determine original path early (needed for login redirect) -
+    original_path: str = "/" + full_path if full_path else "/"
+    if request.url.query:
+        original_path += "?" + request.url.query
+
+    # ---------- 2. Extract Bearer token (Header or Cookie) ------------------
     auth_header: str = request.headers.get("authorization", "")
     token: Optional[str] = None
 
     if auth_header.lower().startswith("bearer "):
         token = auth_header[7:]
     else:
-        # Fallback to cookie for 'keycloak' login mode
+        # Fallback to cookie — primary method for browser-based tenants
         token = request.cookies.get(AUTH_COOKIE_NAME)
 
     if not token:
-        logger.warning("Missing token in both Authorization header and cookie")
+        # Browser clients get redirected to the ZTAM login page.
+        # API clients (no 'text/html' in Accept) get a 401 JSON response.
+        accept: str = request.headers.get("accept", "")
+        if "text/html" in accept:
+            login_url = f"/ztam/login?next={original_path}"
+            logger.info("[check] No token — redirecting browser to %s", login_url)
+            return Response(status_code=302, headers={"location": login_url})
+        logger.warning("[check] Missing token (API request) for %s", original_path)
         return Response(
             content='{"error":"missing token"}',
             status_code=401,
@@ -456,7 +678,6 @@ async def check(request: Request, full_path: str = ""):
         roles = ["viewer"]
 
     # ---------- 7. Build OPA input -------------------------------------------
-    original_path: str   = "/" + full_path if full_path else str(request.url.path)
     original_method: str = request.method.upper()
 
     opa_input = {
@@ -544,6 +765,10 @@ async def check(request: Request, full_path: str = ""):
         "Access denied — user=%s roles=%s path=%s reason=%s",
         user_id, roles, original_path, deny_reason,
     )
+    # Return a user-friendly HTML page for browser requests
+    accept: str = request.headers.get("accept", "")
+    if "text/html" in accept:
+        return Response(content=_ZTAM_DENIED_HTML, status_code=403, media_type="text/html")
     return Response(
         content=json.dumps({"error": "access denied", "reason": deny_reason}),
         status_code=403,

@@ -65,6 +65,20 @@ static_resources:
                     typed_config:
                       "@type": type.googleapis.com/envoy.extensions.access_loggers.stream.v3.StdoutAccessLog
                 http_filters:
+                  # Strip trust headers from client requests BEFORE ext_authz runs.
+                  # This prevents header spoofing while allowing ext_authz to
+                  # re-add validated headers that reach the upstream correctly.
+                  - name: envoy.filters.http.lua
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.lua.v3.Lua
+                      default_source_code:
+                        inline_string: |
+                          function envoy_on_request(handle)
+                            handle:headers():remove("x-username")
+                            handle:headers():remove("x-user-roles")
+                            handle:headers():remove("x-user-id")
+                            handle:headers():remove("x-tenant-id")
+                          end
                   - name: envoy.filters.http.ext_authz
                     typed_config:
                       "@type": type.googleapis.com/envoy.extensions.filters.http.ext_authz.v3.ExtAuthz
@@ -81,6 +95,7 @@ static_resources:
                             patterns:
                               - exact: authorization
                               - exact: cookie
+                              - exact: accept
                               - exact: x-device-id
                               - exact: x-forwarded-for
                               - exact: host
@@ -124,6 +139,16 @@ static_resources:
                             key: Cache-Control
                             value: "no-store"
                       routes:
+                        # ── Platform login: handled by auth-middleware, no ext_authz ──
+                        - match:
+                            prefix: "/ztam/"
+                          route:
+                            cluster: auth_middleware_cluster
+                            timeout: 10s
+                          typed_per_filter_config:
+                            envoy.filters.http.ext_authz:
+                              "@type": type.googleapis.com/envoy.extensions.filters.http.ext_authz.v3.ExtAuthzPerRoute
+                              disabled: true
                         - match:
                             path: "/api/auth/login"
                           route:
@@ -139,16 +164,6 @@ static_resources:
                           route:
                             cluster: auth_middleware_cluster
                             prefix_rewrite: "/logout"
-                            timeout: 10s
-                          typed_per_filter_config:
-                            envoy.filters.http.ext_authz:
-                              "@type": type.googleapis.com/envoy.extensions.filters.http.ext_authz.v3.ExtAuthzPerRoute
-                              disabled: true
-                        - match:
-                            path: "/login"
-                          route:
-                            cluster: store_cluster
-                            host_rewrite_literal: "store-app-wmzx.onrender.com"
                             timeout: 10s
                           typed_per_filter_config:
                             envoy.filters.http.ext_authz:
@@ -199,6 +214,16 @@ static_resources:
                             key: Cache-Control
                             value: "no-store"
                       routes:
+                        # ── Platform login: served by auth-middleware, no auth required ──
+                        - match:
+                            prefix: "/ztam/"
+                          route:
+                            cluster: auth_middleware_cluster
+                            timeout: 10s
+                          typed_per_filter_config:
+                            envoy.filters.http.ext_authz:
+                              "@type": type.googleapis.com/envoy.extensions.filters.http.ext_authz.v3.ExtAuthzPerRoute
+                              disabled: true
                         # ── Frontend HTML pages: pass through, no auth needed ──
                         - match:
                             path: "/"
@@ -244,25 +269,6 @@ static_resources:
                             cluster: auth_middleware_cluster
                             prefix_rewrite: "/login-proxy"
                             timeout: 10s
-                          typed_per_filter_config:
-                            envoy.filters.http.ext_authz:
-                              "@type": type.googleapis.com/envoy.extensions.filters.http.ext_authz.v3.ExtAuthzPerRoute
-                              disabled: true
-                        # ── Keycloak Identity Flow (OAuth2) ──
-                        - match:
-                            path: "/api/auth/login-redirect"
-                          route:
-                            cluster: auth_middleware_cluster
-                            prefix_rewrite: "/login-redirect"
-                          typed_per_filter_config:
-                            envoy.filters.http.ext_authz:
-                              "@type": type.googleapis.com/envoy.extensions.filters.http.ext_authz.v3.ExtAuthzPerRoute
-                              disabled: true
-                        - match:
-                            path: "/api/auth/callback"
-                          route:
-                            cluster: auth_middleware_cluster
-                            prefix_rewrite: "/auth/callback"
                           typed_per_filter_config:
                             envoy.filters.http.ext_authz:
                               "@type": type.googleapis.com/envoy.extensions.filters.http.ext_authz.v3.ExtAuthzPerRoute
