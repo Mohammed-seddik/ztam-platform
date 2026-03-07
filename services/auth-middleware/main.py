@@ -521,12 +521,18 @@ async def check(request: Request, full_path: str = ""):
                 username, primary_role, original_path,
             )
 
-        # Only send clean application roles in the header (no Keycloak internals)
-        clean_roles = [r for r in roles if r not in _KC_INTERNAL_ROLES]
+        # Build downstream roles list.
+        # Prefer the SPI-assigned custom_role (authoritative application role).
+        # Fall back to the filtered realm/client roles for non-SPI tenants.
+        if custom_role:
+            clean_roles = [primary_role]
+        else:
+            clean_roles = [r for r in roles if r not in _KC_INTERNAL_ROLES]
         return Response(
             status_code=200,
             headers={
                 "x-user-id":    user_id,
+                "x-username":   username,
                 "x-user-roles": ",".join(clean_roles),
                 "x-tenant-id":  tenant_id,
                 **extra_headers,

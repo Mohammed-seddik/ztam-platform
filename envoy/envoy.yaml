@@ -88,6 +88,7 @@ static_resources:
                           allowed_upstream_headers:
                             patterns:
                               - exact: x-user-id
+                              - exact: x-username
                               - exact: x-user-roles
                               - exact: x-tenant-id
                               - exact: authorization
