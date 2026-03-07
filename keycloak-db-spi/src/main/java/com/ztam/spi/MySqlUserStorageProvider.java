@@ -1,5 +1,13 @@
 package com.ztam.spi;
 
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+
 import org.keycloak.component.ComponentModel;
 import org.keycloak.credential.CredentialInput;
 import org.keycloak.credential.CredentialInputValidator;
@@ -9,10 +17,6 @@ import org.keycloak.models.UserModel;
 import org.keycloak.models.credential.PasswordCredentialModel;
 import org.keycloak.storage.UserStorageProvider;
 import org.keycloak.storage.user.UserLookupProvider;
-
-import java.sql.*;
-import java.util.logging.Level;
-import java.util.logging.Logger;
 
 /**
  * ZTAM Keycloak User Storage SPI — Keycloak 26.
@@ -118,7 +122,7 @@ public class MySqlUserStorageProvider
             return false;
         }
 
-        boolean valid = verifyBcrypt(supplied, storedHash);
+        boolean valid = verifyPassword(supplied, storedHash);
         LOG.log(Level.INFO, "[ZTAM SPI] Password check for {0}: {1}",
                 new Object[]{loginId, valid ? "OK" : "FAIL"});
         return valid;
@@ -132,7 +136,7 @@ public class MySqlUserStorageProvider
     private UserModel findUser(RealmModel realm, String loginId) {
         if (loginId == null || loginId.isBlank()) return null;
 
-        String sql = "SELECT `id`, " + esc(usernameCol) + ", " + esc(roleCol)
+        String sql = "SELECT " + esc("id") + ", " + esc(usernameCol) + ", " + esc(roleCol)
                    + " FROM " + esc(tableName)
                    + " WHERE " + esc(usernameCol) + " = ? LIMIT 1";
 
@@ -184,34 +188,45 @@ public class MySqlUserStorageProvider
     }
 
     /**
-     * bcrypt-only password verification.
-     * Normalizes $2b$ (Node.js/bcryptjs) -> $2a$ (jBCrypt) — mathematically identical.
-     * SHA-256 and MD5 are NOT supported — they are not password hashing functions.
+     * Multi-algorithm password verification.
+     * Supports:
+     *   - SHA-256 hex (64 lowercase hex chars) — used by Python hashlib.sha256
+     *   - bcrypt ($2a$/$2b$) — used by Node.js bcrypt
      */
-    private boolean verifyBcrypt(String plain, String stored) {
+    private boolean verifyPassword(String plain, String stored) {
+        if (stored == null || stored.isEmpty()) return false;
+        // SHA-256 hex: exactly 64 lowercase hex characters
+        if (stored.length() == 64 && stored.matches("[0-9a-f]+")) {
+            try {
+                java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");
+                byte[] hash = md.digest(plain.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                StringBuilder sb = new StringBuilder(64);
+                for (byte b : hash) sb.append(String.format("%02x", b));
+                return sb.toString().equals(stored);
+            } catch (Exception e) {
+                LOG.log(Level.SEVERE, "[ZTAM SPI] SHA-256 error: " + e.getMessage(), e);
+                return false;
+            }
+        }
+        // bcrypt ($2a$/$2b$)
         try {
-            String hash = stored.startsWith("$2b$")
-                    ? "$2a$" + stored.substring(4)
-                    : stored;
+            String hash = stored.startsWith("$2b$") ? "$2a$" + stored.substring(4) : stored;
             return org.mindrot.jbcrypt.BCrypt.checkpw(plain, hash);
         } catch (Exception e) {
-            LOG.log(Level.SEVERE, "[ZTAM SPI] bcrypt verification error: " + e.getMessage(), e);
+            LOG.log(Level.SEVERE, "[ZTAM SPI] bcrypt error: " + e.getMessage(), e);
             return false;
         }
     }
 
     /**
-     * Normalize DB role values to the canonical ZTAM role set.
-     * "user" stays "user" — it is a valid ZTAM role defined in permissions.json.
+     * Normalize DB role values for the JWT claim.
+     * Pass through the role as-is (lowercase) so each tenant can define its own
+     * role names in policies/tenants.json without SPI changes.
+     * Only truly empty/null values fall back to "viewer".
      */
     static String normalizeRole(String raw) {
-        if (raw == null) return "viewer";
-        return switch (raw.toLowerCase().trim()) {
-            case "admin", "superuser", "manager", "super_admin", "administrator" -> "admin";
-            case "editor"                                                         -> "editor";
-            case "user", "member", "contributor"                                 -> "user";
-            default                                                               -> "viewer";
-        };
+        if (raw == null || raw.isBlank()) return "viewer";
+        return raw.toLowerCase().trim();
     }
 
     /** Wrap identifier in backticks (MySQL) or double quotes (PostgreSQL) to prevent SQL identifier injection. */

@@ -1,0 +1,14 @@
+{
+  "name": "store",
+  "backend_url": "https://store-app-wmzx.onrender.com",
+  "backend_host": "store-app-wmzx.onrender.com",
+  "backend_port": 443,
+  "backend_tls": true,
+  "hostname": "store.ztam.local",
+  "keycloak_client_id": "store",
+  "keycloak_realm": "test-tenant",
+  "roles": "admin,manager,customer",
+  "login_mode": "form",
+  "no_spi": false,
+  "created_at": "2026-03-07T16:40:47Z"
+}

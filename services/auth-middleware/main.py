@@ -414,11 +414,15 @@ async def check(request: Request, full_path: str = ""):
             media_type="application/json",
         )
 
-    # Verify the token was issued for our client (azp = authorized party)
-    if claims.get("azp") != KC_CLIENT_ID:
-        logger.warning("JWT rejected: azp=%s expected=%s", claims.get("azp"), KC_CLIENT_ID)
+    # Verify the token was issued for a client in our realm.
+    # We accept any non-empty azp — the JWKS signature + issuer check already
+    # guarantees the token came from our Keycloak. Strict azp == KC_CLIENT_ID
+    # would break multi-tenant flows where each tenant has its own client_id.
+    azp = claims.get("azp", "")
+    if not azp:
+        logger.warning("JWT rejected: azp claim missing")
         return Response(
-            content='{"error":"invalid or expired token"}',
+            content='{"error":"invalid token: no authorized party"}',
             status_code=403,
             media_type="application/json",
         )
@@ -426,7 +430,19 @@ async def check(request: Request, full_path: str = ""):
     # ---------- 6. Extract user claims ---------------------------------------
     user_id: str     = claims.get("sub", "")
     email: str       = claims.get("email", "")
-    tenant_id: str   = claims.get("tenant_id") or claims.get("azp") or KC_REALM
+
+    # Derive tenant from the original virtual host (e.g. "store.ztam.local" → "store").
+    # This lets OPA look up the correct per-tenant policies regardless of which
+    # Keycloak client was used for authentication.
+    host_header: str = request.headers.get("host", "")
+    host_clean: str  = host_header.split(":")[0]          # strip port
+    tenant_from_host: str = host_clean.split(".")[0] if "." in host_clean else ""
+    tenant_id: str = (
+        tenant_from_host
+        or claims.get("tenant_id")
+        or claims.get("azp")
+        or KC_REALM
+    )
     roles: list[str] = extract_roles(claims)
 
     if not user_id:

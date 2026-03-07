@@ -77,6 +77,24 @@ def vhost_snippet(name: str, hostname: str, login_mode: str = "form") -> str:
                               "@type": type.googleapis.com/envoy.extensions.filters.http.ext_authz.v3.ExtAuthzPerRoute
                               disabled: true
                         - match:
+                            path: "/login"
+                          route:
+                            cluster: {name}_cluster
+                            timeout: 10s
+                          typed_per_filter_config:
+                            envoy.filters.http.ext_authz:
+                              "@type": type.googleapis.com/envoy.extensions.filters.http.ext_authz.v3.ExtAuthzPerRoute
+                              disabled: true
+                        - match:
+                            prefix: "/static/"
+                          route:
+                            cluster: {name}_cluster
+                            timeout: 10s
+                          typed_per_filter_config:
+                            envoy.filters.http.ext_authz:
+                              "@type": type.googleapis.com/envoy.extensions.filters.http.ext_authz.v3.ExtAuthzPerRoute
+                              disabled: true
+                        - match:
                             prefix: "/"
                           route:
                             cluster: {name}_cluster

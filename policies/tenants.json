@@ -1,47 +1,92 @@
 {
-  "_comment": "Per-tenant permissions. Key = Keycloak client_id (= azp claim). Each tenant overrides the global policies/permissions.json fallback.",
-  "testapp": {
-    "roles": {
-      "user": {
-        "allowed_paths": [
-          "/api/"
-        ],
-        "denied_paths": [
-          "/admin/",
-          "/admin"
-        ],
-        "allowed_methods": [
-          "GET",
-          "POST"
-        ]
-      },
-      "editor": {
-        "allowed_paths": [
-          "/api/"
-        ],
-        "denied_paths": [
-          "/admin/",
-          "/admin"
-        ],
-        "allowed_methods": [
-          "GET",
-          "POST",
-          "PUT",
-          "PATCH",
-          "DELETE"
-        ]
-      },
-      "viewer": {
-        "allowed_paths": [
-          "/api/"
-        ],
-        "denied_paths": [
-          "/admin/",
-          "/admin"
-        ],
-        "allowed_methods": [
-          "GET"
-        ]
+  "tenants": {
+    "testapp": {
+      "roles": {
+        "user": {
+          "allowed_paths": [
+            "/api/"
+          ],
+          "denied_paths": [
+            "/admin/",
+            "/admin"
+          ],
+          "allowed_methods": [
+            "GET",
+            "POST"
+          ]
+        },
+        "editor": {
+          "allowed_paths": [
+            "/api/"
+          ],
+          "denied_paths": [
+            "/admin/",
+            "/admin"
+          ],
+          "allowed_methods": [
+            "GET",
+            "POST",
+            "PUT",
+            "PATCH",
+            "DELETE"
+          ]
+        },
+        "viewer": {
+          "allowed_paths": [
+            "/api/"
+          ],
+          "denied_paths": [
+            "/admin/",
+            "/admin"
+          ],
+          "allowed_methods": [
+            "GET"
+          ]
+        }
+      }
+    },
+    "store": {
+      "roles": {
+        "admin": {
+          "allowed_paths": [
+            "/"
+          ],
+          "denied_paths": [],
+          "allowed_methods": [
+            "GET",
+            "POST",
+            "PUT",
+            "PATCH",
+            "DELETE"
+          ]
+        },
+        "manager": {
+          "allowed_paths": [
+            "/"
+          ],
+          "denied_paths": [
+            "/admin"
+          ],
+          "allowed_methods": [
+            "GET",
+            "POST"
+          ]
+        },
+        "customer": {
+          "allowed_paths": [
+            "/store",
+            "/order",
+            "/logout"
+          ],
+          "denied_paths": [
+            "/admin",
+            "/manager"
+          ],
+          "allowed_methods": [
+            "GET",
+            "POST"
+          ]
+        }
       }
     }
   }
