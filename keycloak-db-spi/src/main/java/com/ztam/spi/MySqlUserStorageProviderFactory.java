@@ -22,6 +22,7 @@ public class MySqlUserStorageProviderFactory
     public static final String PROVIDER_ID = "mysql-db-provider";
 
     // ── Configuration field keys ────────────────────────────────────────────
+    static final String CFG_TYPE      = "db_type";
     static final String CFG_HOST      = "db_host";
     static final String CFG_PORT      = "db_port";
     static final String CFG_NAME      = "db_name";
@@ -41,13 +42,20 @@ public class MySqlUserStorageProviderFactory
 
     @Override
     public String getHelpText() {
-        return "Authenticates users against a client-owned MySQL database (read-only).";
+        return "Authenticates users against a client-owned MySQL or PostgreSQL database (read-only).";
     }
 
     // ── Configuration properties (visible in Keycloak Admin UI) ─────────────
     @Override
     public List<ProviderConfigProperty> getConfigProperties() {
         return ProviderConfigurationBuilder.create()
+                .property()
+                    .name(CFG_TYPE).label("Database Type")
+                    .helpText("Choose the client's database engine.")
+                    .type(ProviderConfigProperty.LIST_TYPE)
+                    .options("mysql", "postgresql")
+                    .defaultValue("mysql")
+                    .add()
                 .property()
                     .name(CFG_HOST).label("DB Host")
                     .helpText("MySQL server hostname or IP (e.g. 192.168.1.10)")

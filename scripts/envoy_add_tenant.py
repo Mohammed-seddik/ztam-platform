@@ -11,28 +11,28 @@ ROUTES_MARKER  = "# __ZTAM_TENANT_ROUTES__ (do not remove — used by onboard-te
 CLUSTERS_MARKER = "# __ZTAM_TENANT_CLUSTERS__ (do not remove — used by onboard-tenant.sh)"
 
 SECURITY_HEADERS = """\
-          response_headers_to_add:
-            - header:
-                key: Strict-Transport-Security
-                value: "max-age=63072000; includeSubDomains; preload"
-            - header:
-                key: X-Content-Type-Options
-                value: "nosniff"
-            - header:
-                key: X-Frame-Options
-                value: "SAMEORIGIN"
-            - header:
-                key: Referrer-Policy
-                value: "strict-origin-when-cross-origin"
-            - header:
-                key: Content-Security-Policy
-                value: "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'"
-            - header:
-                key: Permissions-Policy
-                value: "geolocation=(), microphone=(), camera=(), payment=()"
-            - header:
-                key: Cache-Control
-                value: "no-store"\
+                      response_headers_to_add:
+                        - header:
+                            key: Strict-Transport-Security
+                            value: "max-age=63072000; includeSubDomains; preload"
+                        - header:
+                            key: X-Content-Type-Options
+                            value: "nosniff"
+                        - header:
+                            key: X-Frame-Options
+                            value: "SAMEORIGIN"
+                        - header:
+                            key: Referrer-Policy
+                            value: "strict-origin-when-cross-origin"
+                        - header:
+                            key: Content-Security-Policy
+                            value: "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'"
+                        - header:
+                            key: Permissions-Policy
+                            value: "geolocation=(), microphone=(), camera=(), payment=()"
+                        - header:
+                            key: Cache-Control
+                            value: "no-store"\
 """
 
 
@@ -130,6 +130,7 @@ def main():
     p.add_argument("--backend-host", required=True)
     p.add_argument("--backend-port", required=True)
     p.add_argument("--backend-tls",  required=True, choices=["true", "false"])
+    p.add_argument("--login-mode",   default="form", choices=["form", "keycloak"])
     p.add_argument("--envoy-yaml",   required=True)
     args = p.parse_args()
 
@@ -155,7 +156,7 @@ def main():
 
     content = content.replace(
         ROUTES_MARKER,
-        vhost_snippet(args.name, args.hostname) + "                    " + ROUTES_MARKER
+        vhost_snippet(args.name, args.hostname, args.login_mode) + "                    " + ROUTES_MARKER
     )
     content = content.replace(
         CLUSTERS_MARKER,

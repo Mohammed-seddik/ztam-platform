@@ -28,6 +28,7 @@ public class MySqlUserStorageProvider
     private final KeycloakSession session;
     private final ComponentModel  model;
 
+    private final String dbType;
     private final String jdbcUrl;
     private final String dbUser;
     private final String dbPass;
@@ -40,12 +41,19 @@ public class MySqlUserStorageProvider
         this.session = session;
         this.model   = model;
 
+        this.dbType      = cfg(MySqlUserStorageProviderFactory.CFG_TYPE);
+        LOG.log(Level.INFO, "[ZTAM SPI] Database type: {0}", dbType);
         String host = cfg(MySqlUserStorageProviderFactory.CFG_HOST);
         String port = cfg(MySqlUserStorageProviderFactory.CFG_PORT);
         String name = cfg(MySqlUserStorageProviderFactory.CFG_NAME);
 
-        this.jdbcUrl     = "jdbc:mysql://" + host + ":" + port + "/" + name
+        if ("postgresql".equalsIgnoreCase(dbType)) {
+            this.jdbcUrl = "jdbc:postgresql://" + host + ":" + port + "/" + name + "?ssl=false";
+        } else {
+            this.jdbcUrl = "jdbc:mysql://" + host + ":" + port + "/" + name
                          + "?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC";
+        }
+
         this.dbUser      = cfg(MySqlUserStorageProviderFactory.CFG_USER);
         this.dbPass      = cfg(MySqlUserStorageProviderFactory.CFG_PASS);
         this.tableName   = cfg(MySqlUserStorageProviderFactory.CFG_TABLE);
@@ -206,8 +214,11 @@ public class MySqlUserStorageProvider
         };
     }
 
-    /** Wrap identifier in backticks to prevent SQL identifier injection via config. */
-    private static String esc(String id) {
+    /** Wrap identifier in backticks (MySQL) or double quotes (PostgreSQL) to prevent SQL identifier injection. */
+    private String esc(String id) {
+        if ("postgresql".equalsIgnoreCase(dbType)) {
+            return "\"" + id.replace("\"", "") + "\"";
+        }
         return "`" + id.replace("`", "") + "`";
     }
 }

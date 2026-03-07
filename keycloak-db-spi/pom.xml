@@ -49,11 +49,17 @@
             <scope>provided</scope>
         </dependency>
 
-        <!-- MySQL JDBC driver — bundled into the JAR -->
         <dependency>
             <groupId>com.mysql</groupId>
             <artifactId>mysql-connector-j</artifactId>
             <version>8.3.0</version>
+        </dependency>
+
+        <!-- PostgreSQL JDBC driver — bundled into the JAR -->
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+            <version>42.7.2</version>
         </dependency>
 
         <!-- BCrypt — bundled into the JAR -->
