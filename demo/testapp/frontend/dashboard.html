@@ -215,15 +215,8 @@
 
   // ── Logout ──────────────────────────────────────────────────────────────────
   document.getElementById('logoutBtn').addEventListener('click', async () => {
-    try {
-      await fetch('/api/auth/logout', {
-        method: 'POST',
-        credentials: 'same-origin',
-      });
-    } catch (err) {
-      // Best-effort logout; always send the browser back through the platform login.
-    }
-    window.location.href = '/ztam/login?next=%2Fdashboard.html';
+    const next = '/dashboard.html';
+    window.location.href = `/ztam/logout?next=${encodeURIComponent(next)}`;
   });
 
   // ── Helpers ─────────────────────────────────────────────────────────────────

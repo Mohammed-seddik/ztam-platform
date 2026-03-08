@@ -1,0 +1,17 @@
+{
+  "version": "v1",
+  "generated_at": "2026-03-08T17:01:30Z",
+  "tenants": [
+    {
+      "tenant_id": "testapp",
+      "display_name": "TestApp (Demo Tenant)",
+      "primary_hostname": "localhost",
+      "integration_mode": "managed_oidc",
+      "identity_mode": "managed",
+      "adapter_mode": "translated_token",
+      "keycloak_realm": "test-tenant",
+      "keycloak_client_id": "test-app",
+      "status": "published"
+    }
+  ]
+}

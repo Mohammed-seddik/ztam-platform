@@ -39,7 +39,9 @@ jobs:
         run: |
           python3 -m py_compile \
             services/auth-middleware/main.py \
+            platform/control-plane/main.py \
             scripts/tenant_manager.py \
+            scripts/bootstrap_control_plane.py \
             scripts/smoke_test_tenant.py \
             scripts/validate_deployment.py \
             demo/setup_demo.py \
@@ -62,5 +64,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build auth-middleware image
         run: docker build ./services/auth-middleware
+      - name: Build control-plane image
+        run: docker build -f platform/control-plane/Dockerfile .
       - name: Build testapp image
         run: docker build ./demo/testapp

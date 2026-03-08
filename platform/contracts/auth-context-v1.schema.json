@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ztam.local/schemas/auth-context-v1.schema.json",
+  "title": "ZTAM Auth Context V1",
+  "type": "object",
+  "required": ["tenant", "subject", "request", "client", "device"],
+  "properties": {
+    "tenant": {
+      "type": "object",
+      "required": ["id"],
+      "properties": {
+        "id": { "type": "string" },
+        "integration_mode": { "type": "string" },
+        "identity_mode": { "type": "string" }
+      }
+    },
+    "subject": {
+      "type": "object",
+      "required": ["id", "roles"],
+      "properties": {
+        "id": { "type": "string" },
+        "email": { "type": "string" },
+        "roles": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "request": {
+      "type": "object",
+      "required": ["path", "method"],
+      "properties": {
+        "path": { "type": "string" },
+        "method": { "type": "string" }
+      }
+    },
+    "client": {
+      "type": "object",
+      "required": ["type", "host"],
+      "properties": {
+        "type": { "type": "string", "enum": ["browser", "api"] },
+        "host": { "type": "string" }
+      }
+    },
+    "device": {
+      "type": "object",
+      "required": ["posture"],
+      "properties": {
+        "posture": { "type": "string", "enum": ["unknown"] },
+        "risk_score": { "type": "integer" }
+      }
+    }
+  }
+}

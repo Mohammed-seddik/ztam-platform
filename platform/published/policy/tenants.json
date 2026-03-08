@@ -1,0 +1,68 @@
+{
+  "version": "v1",
+  "generated_at": "2026-03-08T17:01:30Z",
+  "tenants": [
+    {
+      "tenant_id": "testapp",
+      "roles": {
+        "editor": {
+          "allowed_paths": [
+            "/api/"
+          ],
+          "allowed_exact_paths": [
+            "/",
+            "/dashboard.html",
+            "/favicon.ico"
+          ],
+          "denied_paths": [
+            "/admin/",
+            "/admin"
+          ],
+          "allowed_methods": [
+            "GET",
+            "POST",
+            "PUT",
+            "PATCH",
+            "DELETE"
+          ]
+        },
+        "user": {
+          "allowed_paths": [
+            "/api/"
+          ],
+          "allowed_exact_paths": [
+            "/",
+            "/dashboard.html",
+            "/favicon.ico"
+          ],
+          "denied_paths": [
+            "/admin/",
+            "/admin"
+          ],
+          "allowed_methods": [
+            "GET",
+            "POST",
+            "DELETE"
+          ]
+        },
+        "viewer": {
+          "allowed_paths": [
+            "/api/"
+          ],
+          "allowed_exact_paths": [
+            "/",
+            "/dashboard.html",
+            "/favicon.ico"
+          ],
+          "denied_paths": [
+            "/admin/",
+            "/admin"
+          ],
+          "allowed_methods": [
+            "GET"
+          ]
+        }
+      }
+    }
+  ]
+}

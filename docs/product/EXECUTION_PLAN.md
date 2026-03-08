@@ -31,7 +31,7 @@ Make ZTAM feel like a product a real client can buy, integrate, validate, and op
 
 - `done` Browser requests redirect to the correct login experience
 - `done` Header spoofing is blocked before ext_authz
-- `done` Form-login flow is validated live for the store tenant
+- `done` Form-login compatibility flow was validated during earlier demo iterations
 - `done` Keycloak-mode redirect path is implemented in auth-middleware
 
 ## Phase 4: Production Readiness

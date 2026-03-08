@@ -49,8 +49,8 @@ Use the bundled demo users:
 Show:
 
 1. unauthenticated access goes to login
-2. admin can access admin-protected functionality
-3. limited user is denied where appropriate
+2. admin can access all task data
+3. limited user can only access their own task view and permitted actions
 
 Say:
 
@@ -73,7 +73,7 @@ If the teacher asks how a new client website is integrated, run:
 
 ```bash
 python3 scripts/tenant_manager.py assess \
-   --backend-url https://store-app-wmzx.onrender.com \
+   --backend-url https://app.customer.com \
    --name newclient \
    --hostname newclient.ztam.local \
    --roles "admin,manager,user" \
@@ -116,7 +116,7 @@ docker compose up -d --build
 docker compose --profile observability up -d prometheus grafana
 python3 demo/setup_demo.py --force
 python3 scripts/tenant_manager.py validate
-python3 scripts/tenant_manager.py assess --backend-url https://store-app-wmzx.onrender.com
+python3 scripts/tenant_manager.py assess --backend-url https://app.customer.com
 ./scripts/demo_teacher_flow.sh
 ```
 

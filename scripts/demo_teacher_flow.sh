@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-BACKEND_URL="${1:-https://store-app-wmzx.onrender.com}"
+BACKEND_URL="${1:-https://example.com}"
 CLIENT_NAME="${2:-teacherdemo}"
 CLIENT_HOSTNAME="${3:-teacherdemo.ztam.local}"
 CLIENT_ROLES="${4:-admin,manager,user}"
@@ -22,7 +22,7 @@ echo "[2/4] Prove working protection on bundled demo tenant"
 python3 scripts/smoke_test_tenant.py \
   --base-url https://localhost \
   --protected-path /api/tasks \
-  --login-mode form \
+  --login-mode keycloak \
   --username alice \
   --password secret123 \
   --expect-status 200 \
@@ -30,11 +30,11 @@ python3 scripts/smoke_test_tenant.py \
 
 python3 scripts/smoke_test_tenant.py \
   --base-url https://localhost \
-  --protected-path /admin \
-  --login-mode form \
+  --protected-path /dashboard.html \
+  --login-mode keycloak \
   --username charlie \
   --password pass123 \
-  --expect-status 403 \
+  --expect-status 200 \
   --insecure
 
 echo

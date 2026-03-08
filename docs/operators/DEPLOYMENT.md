@@ -138,6 +138,14 @@ To sell ZTAM as a true Zero Trust platform, you must enable these "Identity Hard
 
 Zero Trust is incomplete without MFA.
 
+Fastest repeatable path for this repo:
+
+```bash
+python3 demo/setup_demo.py --enable-mfa
+```
+
+That enables Keycloak TOTP policy and marks `Configure OTP` as a default required action.
+
 1. Go to **Authentication** → **Required Actions**.
 2. Set **Configure OTP** to **Enabled** and **Default Action**.
 3. Now, every new user will be forced to set up Google Authenticator/FreeOTP.

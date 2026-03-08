@@ -26,6 +26,7 @@ HTTP :80 → 301 redirect → HTTPS :443
 | `envoy`           | envoyproxy/envoy:v1.28.7   | **80, 443**       | TLS termination + reverse proxy + ext_authz        |
 | `keycloak`        | keycloak:26.5.5            | 8080 (admin only) | Identity provider + session management             |
 | `auth-middleware` | FastAPI / Python 3.12      | — (internal)      | JWT validation + rate limiting + token translation |
+| `control-plane`   | FastAPI / Python 3.12      | 8010 (localhost)  | Tenant lifecycle, validation, publishing, audit    |
 | `opa`             | openpolicyagent/opa:0.64.1 | — (internal)      | Policy engine (Rego rules)                         |
 | `testapp`         | Node.js 20                 | — (internal)      | Bundled sample protected app                       |
 | `testapp-db`      | mysql:8                    | — (internal)      | Bundled sample app's user + task database          |
@@ -115,6 +116,12 @@ and JWT protocol mappers, then smoke-tests the full login flow:
 python3 demo/setup_demo.py
 ```
 
+To force TOTP MFA enrollment on first login:
+
+```bash
+python3 demo/setup_demo.py --enable-mfa
+```
+
 The root-level `setup_demo.py` wrapper still works for backward compatibility.
 
 ### 6 — Open the app
@@ -124,6 +131,20 @@ https://localhost
 ```
 
 HTTP requests to `http://localhost` are automatically redirected to HTTPS.
+
+### 7 — Bootstrap the control plane (optional but recommended)
+
+Import the legacy demo tenant into the new control-plane database:
+
+```bash
+python3 scripts/bootstrap_control_plane.py
+```
+
+Control-plane API:
+
+```text
+http://127.0.0.1:8010
+```
 
 ---
 
@@ -146,10 +167,10 @@ ZTAM is designed for multi-tenancy. You can onboard any number of client applica
 
 Core docs by audience:
 
-- Demo and review: `DEMO_PRESENTATION_GUIDE.md`, `PROJECT_EXPLANATION.md`, `ARCHITECTURE.md`
-- Operators: `ONBOARDING_PLAYBOOK.md`, `CLIENT_INTEGRATION_PATTERNS.md`, `DEPLOYMENT.md`, `GO_LIVE_CHECKLIST.md`
-- Governance: `INTEGRATION_CONTRACT.md`, `TENANT_CHANGE_POLICY.md`, `OBSERVABILITY_RUNBOOK.md`
-- Delivery and roadmap: `CUSTOMER_HANDOFF_TEMPLATE.md`, `EXECUTION_PLAN.md`, `ENTERPRISE_ROADMAP.md`
+- Demo and review: `docs/demo/DEMO_PRESENTATION_GUIDE.md`, `docs/architecture/PROJECT_EXPLANATION.md`, `docs/architecture/ARCHITECTURE.md`
+- Operators: `docs/operators/ONBOARDING_PLAYBOOK.md`, `docs/operators/CLIENT_INTEGRATION_PATTERNS.md`, `docs/operators/DEPLOYMENT.md`, `docs/operators/GO_LIVE_CHECKLIST.md`
+- Governance: `docs/operators/INTEGRATION_CONTRACT.md`, `docs/operators/TENANT_CHANGE_POLICY.md`, `docs/operators/OBSERVABILITY_RUNBOOK.md`
+- Delivery and roadmap: `docs/operators/CUSTOMER_HANDOFF_TEMPLATE.md`, `docs/product/EXECUTION_PLAN.md`, `docs/product/ENTERPRISE_ROADMAP.md`
 
 ### Tomorrow's first-client path
 
@@ -157,11 +178,11 @@ If you are onboarding a real client, do not start by hand-editing configs.
 
 Use this order:
 
-1. Read `CLIENT_INTEGRATION_PATTERNS.md` to classify the client type.
+1. Read `docs/operators/CLIENT_INTEGRATION_PATTERNS.md` to classify the client type.
 2. Run `python3 scripts/tenant_manager.py assess --backend-url <client-url> --name <tenant> --hostname <host> --roles "admin,manager,user" --write-config`.
 3. Confirm the recommended login mode, role list, and any redirect or cookie risks.
-4. Follow `ONBOARDING_PLAYBOOK.md` for tenant creation, validation, smoke test, and handoff.
-5. Do not release until `GO_LIVE_CHECKLIST.md` is closed.
+4. Follow `docs/operators/ONBOARDING_PLAYBOOK.md` for tenant creation, validation, smoke test, and handoff.
+5. Do not release until `docs/operators/GO_LIVE_CHECKLIST.md` is closed.
 
 ### Optional observability profile
 
@@ -184,7 +205,19 @@ Default Grafana login:
 Prometheus scrapes the auth-middleware `/metrics` endpoint on the internal Docker network.
 Grafana auto-provisions the Prometheus datasource and a starter dashboard named `ZTAM Overview`.
 
-Tenant config is now the source of truth for onboarding:
+The repo is in migration to a control-plane source-of-truth model:
+
+- control-plane DB/API is the target source of truth
+- `platform/published/` contains generated runtime bundles
+- `tenants/<name>/config.json` remains as a legacy import/export path during migration
+
+Published runtime bundles used by the data plane:
+
+- `platform/published/auth/tenants.json`
+- `platform/published/policy/tenants.json`
+- `platform/published/routing/tenants.json`
+
+Legacy tenant config still exists for backward compatibility:
 
 - `tenants/<name>/config.json` stores backend metadata, login mode, roles, and tenant-specific permissions
 - `python3 scripts/tenant_manager.py validate` checks tenant definitions before apply
@@ -193,7 +226,7 @@ Tenant config is now the source of truth for onboarding:
 
 ### Case A: App with its own Login Page
 
-Uses the **Form Login Mode** (default). ZTAM intercepts the login POST and translates it to Keycloak.
+Uses the **Form Login Mode** only when preserving the application's login UX is a hard requirement. This is not the default platform experience.
 
 ```bash
 ./scripts/onboard-tenant.sh \
@@ -204,7 +237,7 @@ Uses the **Form Login Mode** (default). ZTAM intercepts the login POST and trans
 
 ### Case B: App with NO Login Page
 
-Uses the **Keycloak Login Mode**. Unauthenticated users are redirected to Keycloak's own login UI.
+Uses the **Keycloak Login Mode**. This is the default and preferred v1 experience. Unauthenticated users are redirected to Keycloak's own login UI.
 
 ```bash
 ./scripts/onboard-tenant.sh \
@@ -229,7 +262,7 @@ Collect these inputs first:
 - role column if available
 - hash algorithm, preferably bcrypt
 
-Use `CLIENT_INTEGRATION_PATTERNS.md` to decide whether DB federation is actually required for that tenant.
+Use `docs/operators/CLIENT_INTEGRATION_PATTERNS.md` to decide whether DB federation is actually required for that tenant.
 
 ### Offboarding a Tenant
 
@@ -242,11 +275,11 @@ Use `CLIENT_INTEGRATION_PATTERNS.md` to decide whether DB federation is actually
 ```bash
 python3 scripts/tenant_manager.py validate
 python3 scripts/tenant_manager.py list
-python3 scripts/tenant_manager.py assess --backend-url https://store-app-wmzx.onrender.com
-python3 scripts/smoke_test_tenant.py --base-url https://store.ztam.local --protected-path /admin --username admin --password admin123 --expect-text "Admin Dashboard" --insecure
+python3 scripts/tenant_manager.py assess --backend-url https://app.customer.com
+python3 scripts/smoke_test_tenant.py --base-url https://localhost --protected-path /api/tasks --login-mode keycloak --insecure
 python3 scripts/smoke_test_tenant.py --base-url https://localhost --host-header newtenant.yourdomain.com --protected-path / --login-mode keycloak --insecure
 python3 scripts/validate_deployment.py --env-file .env --cert-dir envoy/certs
-cat GO_LIVE_CHECKLIST.md
+cat docs/operators/GO_LIVE_CHECKLIST.md
 ```
 
 Teacher/demo shortcut:
@@ -270,7 +303,7 @@ python3 scripts/tenant_manager.py assess \
 
 ## Production Deployment
 
-For full production setup instructions (TLS via Let's Encrypt, DNS, Hardening), see [DEPLOYMENT.md](DEPLOYMENT.md).
+For full production setup instructions (TLS via Let's Encrypt, DNS, Hardening), see [DEPLOYMENT.md](docs/operators/DEPLOYMENT.md).
 
 ## Exposed Ports
 
@@ -289,40 +322,41 @@ The optional observability profile exposes Prometheus and Grafana on loopback on
 
 ## Login Flow (step by step)
 
-1. Browser opens `http://localhost:80` → Envoy serves `login.html` with no auth check
-2. User submits credentials → `POST /api/auth/login`
-3. Envoy intercepts → rewrites destination to **auth-middleware** `/login-proxy`
-4. auth-middleware calls Keycloak's token endpoint with the user credentials
-5. Keycloak invokes the **Java SPI** → `SELECT` from TestApp's MySQL → verifies bcrypt hash
-6. Keycloak returns an **RS256 JWT** (signed with Keycloak's RSA private key)
-7. auth-middleware sends `{ token, username, role }` back — same shape as TestApp's own login
-8. Browser stores the RS256 token; Keycloak creates a visible session
+1. Browser opens `https://localhost`
+2. Envoy pauses the protected request and auth-middleware sees there is no token
+3. auth-middleware redirects the browser to the Keycloak login page
+4. User signs in on Keycloak
+5. Keycloak authenticates the user, including the SPI-backed demo user path
+6. Keycloak redirects back to ZTAM callback with an authorization code
+7. auth-middleware exchanges the code for a Keycloak RS256 access token
+8. auth-middleware stores the token in a secure cookie and redirects back to the app
 
 For every subsequent API call:
 
-9. Browser sends `Authorization: Bearer <RS256 token>`
-10. Envoy's `ext_authz` filter pauses the request → forwards to auth-middleware
-11. auth-middleware validates the RS256 token against Keycloak's JWKS (cached 5 min)
-12. auth-middleware calls OPA with `{ user, request, device }` → OPA allows or denies
-13. On allow: auth-middleware mints an **HS256 token** (TestApp's own secret) → sends it back in the `authorization` header
-14. Envoy forwards the request to TestApp with the HS256 token — TestApp works normally
+9. Browser sends the secure auth cookie on later requests
+10. Envoy's `ext_authz` filter pauses the request and forwards it to auth-middleware
+11. auth-middleware validates the Keycloak RS256 token against JWKS
+12. auth-middleware calls OPA with the v1 auth context `{ tenant, subject, request, client, device }`
+13. On allow: auth-middleware injects trusted identity headers for the backend
+14. If the tenant uses adapter mode `translated_token`, auth-middleware also mints a downstream token for that specific app
+15. Envoy forwards the request to the backend with trusted identity context
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for full diagrams.
+See [ARCHITECTURE.md](docs/architecture/ARCHITECTURE.md) for full diagrams.
 
 ---
 
 ## OPA Policy Summary
 
-Rules are in `policies/authz.rego`. Permissions are in `policies/permissions.json` (hot-reloaded).
+Rules are in `policies/authz.rego`. Global fallback permissions are in `policies/permissions.json`, and published tenant policy data is generated into `platform/published/policy/tenants.json`.
 
 | Role       | Methods                       | Paths                              |
 | ---------- | ----------------------------- | ---------------------------------- |
 | **admin**  | All                           | All                                |
 | **editor** | GET, POST, PUT, PATCH, DELETE | `/api/*` — blocked from `/admin/*` |
-| **user**   | GET, POST, PUT, PATCH, DELETE | `/api/*` — blocked from `/admin/*` |
+| **user**   | GET, POST                     | `/api/*` — blocked from `/admin/*` |
 | **viewer** | GET                           | `/api/*` — blocked from `/admin/*` |
 
-**Device trust:** admin paths require device score ≥ 80 + encrypted=true. All other paths require score ≥ 60.
+**Device trust:** the auth contract now includes `device`, but real posture enforcement is still deferred. The default posture is `unknown`.
 
 ---
 
@@ -330,11 +364,19 @@ Rules are in `policies/authz.rego`. Permissions are in `policies/permissions.jso
 
 ```
 ztam-platform/
-├── *.md                        # Operator, architecture, demo, and handoff docs
+├── docs/                       # Grouped docs by audience
+│   ├── architecture/
+│   ├── demo/
+│   ├── operators/
+│   └── product/
 ├── envoy/
 │   ├── envoy.yaml              # Routing, TLS, ext_authz, security headers
 │   ├── generate-certs.sh       # Self-signed TLS cert generator
 │   └── certs/                  # server.crt + server.key (not in git)
+├── platform/
+│   ├── control-plane/          # Tenant admin API + publish workflow
+│   ├── contracts/              # Canonical v1 schemas
+│   └── published/              # Generated runtime bundles
 ├── keycloak-db-spi/
 │   └── src/main/java/com/ztam/spi/
 │       ├── MySqlUserStorageProviderFactory.java
@@ -358,13 +400,14 @@ ztam-platform/
 ├── .env                        # Secrets — never committed
 ├── .env.example
 ├── setup_demo.py               # Compatibility wrapper → demo/setup_demo.py
-├── demo_test.sh                # Compatibility wrapper → demo/demo_test.sh
-└── ARCHITECTURE.md             # Detailed component + flow documentation
+└── demo_test.sh                # Compatibility wrapper → demo/demo_test.sh
 ```
 
 Repo layout by purpose:
 
-- Root: platform entrypoints, deployment files, and the small set of docs you need during onboarding, review, and handoff.
+- Root: runtime entrypoints and deployment files.
+- `docs/`: grouped documentation by audience instead of many mixed top-level markdown files.
+- `platform/`: the new control-plane and generated runtime-bundle architecture.
 - `demo/`: bundled sample app and demo-only helpers.
 - `services/`, `envoy/`, `policies/`, `scripts/`, `tenants/`: the real platform runtime and operator workflow.
 - `keycloak-db-spi/`: isolated Java extension project for the demo identity bridge.
@@ -372,10 +415,10 @@ Repo layout by purpose:
 Important root docs:
 
 - `README.md`: start here for setup and operator shortcuts
-- `ARCHITECTURE.md`: request flow and component model
-- `DEMO_PRESENTATION_GUIDE.md`: tomorrow-ready presentation script
-- `PROJECT_EXPLANATION.md`: full project narrative in plain language
-- `INTEGRATION_CONTRACT.md`: realistic client integration expectations
+- `docs/architecture/ARCHITECTURE.md`: request flow and component model
+- `docs/demo/DEMO_PRESENTATION_GUIDE.md`: tomorrow-ready presentation script
+- `docs/architecture/PROJECT_EXPLANATION.md`: full project narrative in plain language
+- `docs/operators/INTEGRATION_CONTRACT.md`: realistic client integration expectations
 
 If you use this repo in VS Code, the workspace hides `.venv`, `__pycache__`, `target`, and `build-verify` so the explorer stays focused on source files.
 

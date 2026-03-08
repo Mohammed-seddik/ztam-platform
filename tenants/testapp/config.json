@@ -11,12 +11,17 @@
     "user",
     "viewer"
   ],
-  "login_mode": "form",
+  "login_mode": "keycloak",
   "no_spi": false,
   "permissions": {
     "editor": {
       "allowed_paths": [
         "/api/"
+      ],
+      "allowed_exact_paths": [
+        "/",
+        "/dashboard.html",
+        "/favicon.ico"
       ],
       "denied_paths": [
         "/admin/",
@@ -34,18 +39,29 @@
       "allowed_paths": [
         "/api/"
       ],
+      "allowed_exact_paths": [
+        "/",
+        "/dashboard.html",
+        "/favicon.ico"
+      ],
       "denied_paths": [
         "/admin/",
         "/admin"
       ],
       "allowed_methods": [
         "GET",
-        "POST"
+        "POST",
+        "DELETE"
       ]
     },
     "viewer": {
       "allowed_paths": [
         "/api/"
+      ],
+      "allowed_exact_paths": [
+        "/",
+        "/dashboard.html",
+        "/favicon.ico"
       ],
       "denied_paths": [
         "/admin/",

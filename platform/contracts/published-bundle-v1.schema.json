@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ztam.local/schemas/published-bundle-v1.schema.json",
+  "title": "ZTAM Published Bundle V1",
+  "type": "object",
+  "required": ["version", "generated_at", "tenants"],
+  "properties": {
+    "version": {
+      "type": "string",
+      "const": "v1"
+    },
+    "generated_at": {
+      "type": "string"
+    },
+    "tenants": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  }
+}

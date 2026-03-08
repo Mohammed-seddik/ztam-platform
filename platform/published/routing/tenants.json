@@ -1,0 +1,17 @@
+{
+  "version": "v1",
+  "generated_at": "2026-03-08T17:01:30Z",
+  "tenants": [
+    {
+      "tenant_id": "testapp",
+      "display_name": "TestApp (Demo Tenant)",
+      "primary_hostname": "localhost",
+      "backend_origin": "http://testapp:3000",
+      "login_mode": "keycloak",
+      "backend_host": "testapp",
+      "backend_port": 3000,
+      "backend_tls": false,
+      "status": "published"
+    }
+  ]
+}

@@ -20,8 +20,9 @@ Steps:
 import json, base64, os, sys, urllib.request, urllib.parse
 from pathlib import Path
 
-# ── CLI flag: --force enables native user deletion ─────────────────────────────
+# ── CLI flags ─────────────────────────────────────────────────────────────────
 FORCE_MODE = "--force" in sys.argv
+ENABLE_MFA = "--enable-mfa" in sys.argv or os.environ.get("ZTAM_ENABLE_MFA", "").lower() in {"1", "true", "yes"}
 
 # ── Load .env from project root ────────────────────────────────────────────────
 _env_path = Path(__file__).resolve().parents[1] / ".env"
@@ -118,6 +119,94 @@ else:
     sys.exit(1)
 
 
+def update_realm_settings(changes: dict):
+    code, realm_doc = kc("GET", f"/admin/realms/{REALM}", token=ADMIN)
+    if code != 200 or not isinstance(realm_doc, dict):
+        print(f"   ERROR: could not load realm settings (HTTP {code})")
+        sys.exit(1)
+    realm_doc.update(changes)
+    code, _ = kc("PUT", f"/admin/realms/{REALM}", realm_doc, token=ADMIN)
+    if code not in (200, 204):
+        print(f"   ERROR: could not update realm settings (HTTP {code})")
+        sys.exit(1)
+
+
+def enable_required_totp():
+    code, actions = kc("GET", f"/admin/realms/{REALM}/authentication/required-actions", token=ADMIN)
+    if code != 200 or not isinstance(actions, list):
+        print(f"   ERROR: could not load required actions (HTTP {code})")
+        sys.exit(1)
+
+    action = next(
+        (
+            item for item in actions
+            if item.get("alias") in {"CONFIGURE_TOTP", "CONFIGURE_OTP"}
+            or item.get("providerId") in {"CONFIGURE_TOTP", "CONFIGURE_OTP"}
+        ),
+        None,
+    )
+    if not action:
+        print("   ERROR: Keycloak OTP required action not found")
+        sys.exit(1)
+
+    action["enabled"] = True
+    action["defaultAction"] = True
+    alias = action.get("alias") or action.get("providerId")
+    code, _ = kc("PUT", f"/admin/realms/{REALM}/authentication/required-actions/{alias}", action, token=ADMIN)
+    if code not in (200, 204):
+        print(f"   ERROR: could not enable OTP required action (HTTP {code})")
+        sys.exit(1)
+
+
+def user_storage_component_id():
+    code, components = kc("GET",
+        f"/admin/realms/{REALM}/components?type=org.keycloak.storage.UserStorageProvider",
+        token=ADMIN)
+    if code != 200 or not isinstance(components, list):
+        print(f"   ERROR: could not load user storage components (HTTP {code})")
+        sys.exit(1)
+    component = next(
+        (c for c in components if c.get("providerId") == "mysql-db-provider"),
+        None,
+    )
+    if not component:
+        print("   ERROR: MySQL SPI component not found")
+        sys.exit(1)
+    return component["id"]
+
+
+def assign_totp_required_action_to_user(username: str, component_id: str):
+    user_id = f"f:{component_id}:{username}"
+    encoded = urllib.parse.quote(user_id, safe="")
+    code, user = kc("GET", f"/admin/realms/{REALM}/users/{encoded}", token=ADMIN)
+    if code != 200 or not isinstance(user, dict):
+        print(f"   WARNING: could not resolve federated user '{username}' for MFA (HTTP {code})")
+        return
+    actions = list(user.get("requiredActions") or [])
+    if "CONFIGURE_TOTP" not in actions:
+        actions.append("CONFIGURE_TOTP")
+    user["requiredActions"] = actions
+    code, _ = kc("PUT", f"/admin/realms/{REALM}/users/{encoded}", user, token=ADMIN)
+    if code not in (200, 204):
+        print(f"   WARNING: could not assign OTP required action to '{username}' (HTTP {code})")
+    else:
+        print(f"   ✓ OTP required action assigned to '{username}'")
+
+
+if ENABLE_MFA:
+    print("   ✓ MFA bootstrap requested")
+    update_realm_settings({
+        "otpPolicyType": "totp",
+        "otpPolicyAlgorithm": "HmacSHA1",
+        "otpPolicyDigits": 6,
+        "otpPolicyPeriod": 30,
+        "otpPolicyLookAheadWindow": 1,
+    })
+    print("   ✓ Realm OTP policy set to TOTP (6 digits, 30s)")
+    enable_required_totp()
+    print("   ✓ Configure OTP required action enabled by default")
+
+
 # ── 3. Create client ───────────────────────────────────────────────────────────
 step(3, f"Ensuring client '{KC_CLIENT_ID}' exists...")
 code, _ = kc("POST", f"/admin/realms/{REALM}/clients", {
@@ -199,6 +288,8 @@ else:
         print("   Make sure the SPI JAR is built: cd keycloak-db-spi && mvn clean package")
         sys.exit(1)
 
+SPI_COMPONENT_ID = user_storage_component_id()
+
 
 # ── 5. Create protocol mappers ────────────────────────────────────────────────
 step(5, "Creating protocol mappers (role, db_user_id)...")
@@ -255,6 +346,11 @@ for mapper in MAPPERS_TO_CREATE:
     else:
         print(f"   WARNING: mapper '{mapper['name']}' creation returned HTTP {code}")
 
+if ENABLE_MFA:
+    step("5b", "Assigning OTP setup to demo users...")
+    for demo_username in ("alice", "charlie", "testuser", "demouser"):
+        assign_totp_required_action_to_user(demo_username, SPI_COMPONENT_ID)
+
 
 # ── 6. Delete native Keycloak users (force SPI to serve them) ─────────────────
 step(6, "Removing any native Keycloak users (forces SPI federation)...")
@@ -299,11 +395,16 @@ if "access_token" in resp:
     if not payload.get("role"):
         print("   WARNING: 'role' claim missing. Verify protocol mapper + SPI registration.")
 else:
-    print(f"   ERROR: login failed (HTTP {code}): {resp}")
-    print("   Possible causes:")
-    print("   - testapp-db not yet initialized (wait 10s, retry)")
-    print("   - SPI JAR not built: cd keycloak-db-spi && mvn clean package -DskipTests")
-    print("   - Wrong KC_CLIENT_SECRET in .env")
+    error_text = json.dumps(resp)
+    if ENABLE_MFA and "Account is not fully set up" in error_text:
+        print("   ✓ Direct-grant smoke test blocked as expected because MFA enrollment is now required")
+        print("     Complete OTP setup once in the browser, then normal interactive login will succeed")
+    else:
+        print(f"   ERROR: login failed (HTTP {code}): {resp}")
+        print("   Possible causes:")
+        print("   - testapp-db not yet initialized (wait 10s, retry)")
+        print("   - SPI JAR not built: cd keycloak-db-spi && mvn clean package -DskipTests")
+        print("   - Wrong KC_CLIENT_SECRET in .env")
 
 # ── 8. Summary ────────────────────────────────────────────────────────────────
 print("\n" + "═" * 60)
@@ -313,6 +414,7 @@ print(f"  Realm            : {REALM}")
 print(f"  Client           : {KC_CLIENT_ID}")
 print(f"  User federation  : MySQL SPI → {MYSQL_HOST}:{MYSQL_PORT}/{MYSQL_DB}")
 print(f"  Protocol mappers : role, db_user_id")
+print(f"  MFA              : {'TOTP required on first login' if ENABLE_MFA else 'disabled by bootstrap'}")
 print(f"  Admin console    : http://localhost:8080")
 print()
 print("  Test users (in testapp-db):")

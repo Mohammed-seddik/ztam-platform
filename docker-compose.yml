@@ -67,6 +67,7 @@ services:
     build: ./services/auth-middleware
     volumes:
       - ./tenants:/app/tenants:ro
+      - ./platform/published:/app/platform/published:ro
     environment:
       KEYCLOAK_URL: http://keycloak:8080
       # KC_ISSUER_URL: the public-facing URL Keycloak stamps in JWT iss claims.
@@ -78,6 +79,7 @@ services:
       OPA_URL: http://opa:8181
       TESTAPP_JWT_SECRET: ${TESTAPP_JWT_SECRET}
       TENANTS_DIR: /app/tenants
+      AUTH_METADATA_FILE: /app/platform/published/auth/tenants.json
     # No external port: only Envoy calls auth-middleware via ext_authz on the internal network.
     # Exposing this port would allow bypassing the policy engine entirely.
     networks: [ztam]
@@ -93,6 +95,32 @@ services:
         condition: service_healthy
       opa:
         condition: service_healthy
+
+  control-plane:
+    build:
+      context: .
+      dockerfile: platform/control-plane/Dockerfile
+    environment:
+      CONTROL_PLANE_DB_PATH: /data/control-plane.db
+      TENANTS_DIR: /app/tenants
+      PUBLISHED_DIR: /app/platform/published
+      POLICIES_FILE: /app/policies/tenants.json
+      ENVOY_YAML: /app/envoy/envoy.yaml
+    volumes:
+      - ./tenants:/app/tenants:ro
+      - ./platform/published:/app/platform/published
+      - ./policies:/app/policies
+      - ./envoy:/app/envoy
+      - control-plane-data:/data
+    ports:
+      - "127.0.0.1:8010:8010"
+    networks: [ztam]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8010/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   envoy:
     image: envoyproxy/envoy:v1.28.7
@@ -195,3 +223,4 @@ volumes:
   testapp-db-data:
   prometheus-data:
   grafana-data:
+  control-plane-data:

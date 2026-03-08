@@ -46,6 +46,140 @@ The application must fit one of these patterns:
 - The application can accept trusted identity context from ZTAM.
 - If the application expects a specific token or header format, that contract must be defined during onboarding.
 
+## Supported Integration Patterns
+
+ZTAM does not assume every application consumes identity the same way.
+
+Large companies usually standardize a small set of supported patterns and then classify each client app into one of them.
+
+ZTAM should be operated the same way.
+
+### Pattern 1: Trusted Header Integration
+
+This is the preferred and most scalable pattern.
+
+What the app does:
+
+- trusts identity headers set by ZTAM
+- does not trust the browser to set those headers
+- uses those headers to resolve the current user, roles, and tenant
+
+Headers:
+
+- `x-user-id`
+- `x-username`
+- `x-user-roles`
+- `x-tenant-id`
+- optional `x-request-id`
+
+Client-side changes:
+
+- point the protected hostname to ZTAM
+- update redirects to use the protected hostname
+- read trusted headers in the backend or middleware
+
+Best fit:
+
+- internal apps
+- server-rendered apps
+- apps where backend auth can be adapted lightly
+
+### Pattern 2: Direct OIDC / Keycloak-Aware App
+
+This is common in mature application teams.
+
+What the app does:
+
+- integrates with Keycloak or OIDC itself
+- understands access tokens, sessions, callbacks, or userinfo directly
+
+Client-side changes:
+
+- configure the app for Keycloak/OIDC
+- align callback URLs and logout URLs with the protected hostname
+- decide which auth responsibilities stay in the app vs ZTAM
+
+Best fit:
+
+- apps already built around OIDC
+- modern SPAs and web apps with native IdP support
+
+### Pattern 3: Adapter / Token Translation
+
+This is the legacy compatibility pattern.
+
+What the app does:
+
+- keeps expecting a local token format or specific auth contract
+- ZTAM translates validated identity into that downstream format
+
+Client-side changes:
+
+- define the exact downstream token or session contract
+- accept a tenant-specific adapter configuration
+- accept stronger validation and narrower support guarantees
+
+Best fit:
+
+- legacy apps
+- apps that cannot easily read gateway headers
+- demo or transition scenarios
+
+### Pattern 4: Unsupported Without App Changes
+
+Some apps are not good candidates without real integration work.
+
+Examples:
+
+- apps that break behind a reverse proxy
+- apps with fragile hostname-bound cookies
+- apps with deeply coupled custom auth/session internals
+- apps that require direct browser-to-backend auth assumptions
+
+In this case the correct platform answer is:
+
+- document the gap
+- list the required changes
+- do not promise zero-effort onboarding
+
+## What Leaders Usually Do
+
+Leader-style platform teams normally use this order of preference:
+
+1. trusted headers
+2. direct OIDC support
+3. adapter/translation path for legacy apps
+4. reject or redesign unsupported apps
+
+They do not pretend every application can be protected with zero changes.
+They define standard patterns, classify the app, and state the required client changes clearly.
+
+## Current ZTAM Status
+
+Here is the honest status of this repository today.
+
+### Already implemented
+
+- Trusted header propagation from ZTAM to the backend
+- Keycloak login page as the default browser login flow
+- Adapter/token translation path for the bundled demo app
+- Tenant classification model in the control-plane contract:
+  - `managed_oidc`
+  - `form_bridge`
+  - `federated_db`
+
+### Partially implemented
+
+- Direct OIDC-aware application integration as a first-class app-owned contract
+  - the platform uses Keycloak and OIDC flows already
+  - but there is not yet a dedicated sample app proving a fully app-native OIDC integration
+
+### Not yet first-class
+
+- multiple packaged sample apps covering all integration patterns
+- formal adapter plugin system for many token/session shapes
+- production-grade self-service onboarding UI
+
 ## Common Client-Side Changes
 
 Large companies normally define these as integration tasks, not as failures.

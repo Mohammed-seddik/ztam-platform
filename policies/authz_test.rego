@@ -11,16 +11,19 @@ _perms := {
     "roles": {
         "user": {
             "allowed_paths":   ["/api/"],
+            "allowed_exact_paths": ["/", "/dashboard.html", "/favicon.ico"],
             "denied_paths":    ["/admin/", "/admin"],
-            "allowed_methods": ["GET", "POST"]
+            "allowed_methods": ["GET", "POST", "DELETE"]
         },
         "editor": {
             "allowed_paths":   ["/api/"],
+            "allowed_exact_paths": ["/", "/dashboard.html", "/favicon.ico"],
             "denied_paths":    ["/admin/", "/admin"],
             "allowed_methods": ["GET", "POST", "PUT", "PATCH", "DELETE"]
         },
         "viewer": {
             "allowed_paths":   ["/api/"],
+            "allowed_exact_paths": ["/", "/dashboard.html", "/favicon.ico"],
             "denied_paths":    ["/admin/", "/admin"],
             "allowed_methods": ["GET"]
         }
@@ -59,9 +62,22 @@ test_user_post_api if {
       with data.permissions as _perms
 }
 
-# user role should NOT be able to DELETE (only GET + POST)
-test_user_denied_delete_task if {
-    not authz.allow
+test_user_get_dashboard_shell if {
+    authz.allow
+      with input as {"user": {"id": "u2", "roles": ["user"]},
+                     "request": {"method": "GET", "path": "/dashboard.html"}}
+      with data.permissions as _perms
+}
+
+test_user_get_root_shell if {
+    authz.allow
+      with input as {"user": {"id": "u2", "roles": ["user"]},
+                     "request": {"method": "GET", "path": "/"}}
+      with data.permissions as _perms
+}
+
+test_user_can_delete_task if {
+    authz.allow
       with input as {"user": {"id": "u2", "roles": ["user"]},
                      "request": {"method": "DELETE", "path": "/api/tasks/5"}}
       with data.permissions as _perms
@@ -173,6 +189,7 @@ _tenant_perms := {
         "roles": {
             "manager": {
                 "allowed_paths":   ["/api/"],
+                "allowed_exact_paths": ["/", "/dashboard.html"],
                 "denied_paths":    ["/admin/"],
                 "allowed_methods": ["GET", "POST", "PUT", "PATCH", "DELETE"]
             }
@@ -192,6 +209,19 @@ test_tenant_specific_role_denied_admin_path if {
     not authz.allow
       with input as {"user": {"id": "u5", "roles": ["manager"], "tenant_id": "myapp"},
                      "request": {"method": "DELETE", "path": "/admin/users"}}
+      with data.tenants as _tenant_perms
+      with data.permissions as _perms
+}
+
+test_v1_auth_context_shape if {
+    authz.allow
+      with input as {
+          "tenant": {"id": "myapp", "integration_mode": "managed_oidc", "identity_mode": "managed"},
+          "subject": {"id": "u7", "roles": ["manager"], "email": "u7@example.com"},
+          "request": {"method": "GET", "path": "/api/reports"},
+          "client": {"type": "browser", "host": "myapp.example.com"},
+          "device": {"posture": "unknown"}
+      }
       with data.tenants as _tenant_perms
       with data.permissions as _perms
 }

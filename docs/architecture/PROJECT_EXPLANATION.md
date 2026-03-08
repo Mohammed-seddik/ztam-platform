@@ -186,7 +186,7 @@ In this mode:
 - Keycloak authenticates the user
 - the platform returns a successful login result back into the app flow
 
-This is the mode used by the current demo tenant and the `store` tenant.
+This mode is supported for compatibility and selective onboarding cases where the client must preserve an existing login UX.
 
 ### Keycloak Mode
 
@@ -222,7 +222,6 @@ A tenant config defines:
 Example tenants already in the repo:
 
 - [tenants/testapp/config.json](/home/mohammed-seddik/PFE%20Folder/ztam-platform/tenants/testapp/config.json)
-- [tenants/store/config.json](/home/mohammed-seddik/PFE%20Folder/ztam-platform/tenants/store/config.json)
 
 The current source-of-truth model is:
 
@@ -340,13 +339,13 @@ This is important because many failures in gateway-based systems are deployment 
 The repo includes several docs that turn the project into something closer to a product package.
 
 - [README.md](/home/mohammed-seddik/PFE%20Folder/ztam-platform/README.md): top-level technical entrypoint
-- [ARCHITECTURE.md](/home/mohammed-seddik/PFE%20Folder/ztam-platform/ARCHITECTURE.md): component and request flow explanation
-- [INTEGRATION_GUIDE.md](/home/mohammed-seddik/PFE%20Folder/ztam-platform/INTEGRATION_GUIDE.md): customer/app integration guidance
-- [ONBOARDING_PLAYBOOK.md](/home/mohammed-seddik/PFE%20Folder/ztam-platform/ONBOARDING_PLAYBOOK.md): operator workflow for new tenants
-- [DEPLOYMENT.md](/home/mohammed-seddik/PFE%20Folder/ztam-platform/DEPLOYMENT.md): deployment guidance
-- [GO_LIVE_CHECKLIST.md](/home/mohammed-seddik/PFE%20Folder/ztam-platform/GO_LIVE_CHECKLIST.md): final release gate
-- [CUSTOMER_HANDOFF_TEMPLATE.md](/home/mohammed-seddik/PFE%20Folder/ztam-platform/CUSTOMER_HANDOFF_TEMPLATE.md): customer delivery summary template
-- [EXECUTION_PLAN.md](/home/mohammed-seddik/PFE%20Folder/ztam-platform/EXECUTION_PLAN.md): roadmap and completion state
+- [ARCHITECTURE.md](/home/mohammed-seddik/PFE%20Folder/ztam-platform/docs/architecture/ARCHITECTURE.md): component and request flow explanation
+- [INTEGRATION_GUIDE.md](/home/mohammed-seddik/PFE%20Folder/ztam-platform/docs/operators/INTEGRATION_GUIDE.md): customer/app integration guidance
+- [ONBOARDING_PLAYBOOK.md](/home/mohammed-seddik/PFE%20Folder/ztam-platform/docs/operators/ONBOARDING_PLAYBOOK.md): operator workflow for new tenants
+- [DEPLOYMENT.md](/home/mohammed-seddik/PFE%20Folder/ztam-platform/docs/operators/DEPLOYMENT.md): deployment guidance
+- [GO_LIVE_CHECKLIST.md](/home/mohammed-seddik/PFE%20Folder/ztam-platform/docs/operators/GO_LIVE_CHECKLIST.md): final release gate
+- [CUSTOMER_HANDOFF_TEMPLATE.md](/home/mohammed-seddik/PFE%20Folder/ztam-platform/docs/operators/CUSTOMER_HANDOFF_TEMPLATE.md): customer delivery summary template
+- [EXECUTION_PLAN.md](/home/mohammed-seddik/PFE%20Folder/ztam-platform/docs/product/EXECUTION_PLAN.md): roadmap and completion state
 
 This matters because the project is trying to be sellable and operable, not just technically interesting.
 

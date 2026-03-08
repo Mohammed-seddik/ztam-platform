@@ -3,51 +3,49 @@ package authz
 import future.keywords.if
 import future.keywords.in
 
-# ── Top-level decision ──────────────────────────────────────────────────────
-default allow        := false
-default deny_reason  := "access denied by default policy"
+default allow := false
+default deny_reason := "access denied by default policy"
+
+subject := object.get(input, "subject", object.get(input, "user", {}))
+tenant := object.get(input, "tenant", {"id": object.get(subject, "tenant_id", object.get(object.get(input, "user", {}), "tenant_id", ""))})
+request_ctx := object.get(input, "request", {})
 
 allow if {
-    input.user.id != ""
-    count(input.user.roles) > 0
+    subject_id != ""
+    count(subject_roles) > 0
     role_permitted
-    # device_ok is intentionally excluded from Phase 1.
-    # Phase 2 will add real device trust store integration.
 }
 
-# ── Deny reason (else-chain prevents OPA undefined/conflict errors) ─────────
 deny_reason := reason if {
-    input.user.id == ""
+    subject_id == ""
     reason := "missing user identity"
 } else := reason if {
-    count(input.user.roles) == 0
+    count(subject_roles) == 0
     reason := "no roles assigned to user"
 } else := reason if {
     not role_permitted
     reason := "role does not have permission for this resource"
 }
 
-# ── Role-based access control ───────────────────────────────────────────────
-# admin always has full access to everything
+subject_id := object.get(subject, "id", "")
+subject_roles := object.get(subject, "roles", [])
+tenant_id := object.get(tenant, "id", object.get(object.get(input, "user", {}), "tenant_id", ""))
+request_path := object.get(request_ctx, "path", "")
+request_method := object.get(request_ctx, "method", "")
+
 role_permitted if {
-    "admin" in input.user.roles
+    "admin" in subject_roles
 }
 
-# non-admin roles: look up tenant-specific permissions, fall back to global.
-# object.get handles the case where tenant_id is missing from input.user.
 role_permitted if {
-    some role in input.user.roles
+    some role in subject_roles
     role != "admin"
-    tenant_id := object.get(input.user, "tenant_id", "")
-    perms     := _resolve_perms(tenant_id, role)
-    path_matches_prefix(input.request.path, perms.allowed_paths)
-    input.request.method in perms.allowed_methods
-    not path_matches_prefix(input.request.path, perms.denied_paths)
+    perms := _resolve_perms(tenant_id, role)
+    path_allowed(request_path, perms)
+    request_method in perms.allowed_methods
+    not path_denied(request_path, perms)
 }
 
-# ── Tenant-aware permission lookup ──────────────────────────────────────────
-# 1st priority: policies/tenants.json entry for this tenant_id
-# Fallback:     policies/permissions.json (global default)
 _resolve_perms(tenant_id, role) = p if {
     tenant_id != ""
     p := data.tenants[tenant_id].roles[role]
@@ -63,8 +61,28 @@ _has_tenant_role(tenant_id, role) if {
     data.tenants[tenant_id].roles[role]
 }
 
-# ── Helper ───────────────────────────────────────────────────────────────────
 path_matches_prefix(path, prefixes) if {
     some prefix in prefixes
     startswith(path, prefix)
+}
+
+path_matches_exact(path, exact_paths) if {
+    some exact_path in exact_paths
+    path == exact_path
+}
+
+path_allowed(path, perms) if {
+    path_matches_prefix(path, object.get(perms, "allowed_paths", []))
+}
+
+path_allowed(path, perms) if {
+    path_matches_exact(path, object.get(perms, "allowed_exact_paths", []))
+}
+
+path_denied(path, perms) if {
+    path_matches_prefix(path, object.get(perms, "denied_paths", []))
+}
+
+path_denied(path, perms) if {
+    path_matches_exact(path, object.get(perms, "denied_exact_paths", []))
 }

@@ -164,9 +164,13 @@ EXPECTED_ISSUER: str = f"{KC_ISSUER_URL}/realms/{KC_REALM}"
 
 # Cookie settings
 AUTH_COOKIE_NAME = "ztam_auth"
+AUTH_ID_COOKIE_NAME = "ztam_id_token"
 AUTH_COOKIE_SECURE = os.getenv("AUTH_COOKIE_SECURE", "true").lower() == "true"
 AUTH_COOKIE_SAMESITE = os.getenv("AUTH_COOKIE_SAMESITE", "lax")
 TENANTS_DIR = Path(os.getenv("TENANTS_DIR", "/app/tenants"))
+AUTH_METADATA_FILE = Path(
+    os.getenv("AUTH_METADATA_FILE", "/app/platform/published/auth/tenants.json")
+)
 
 # ─── JWKS in-memory cache with asyncio lock (prevents thundering herd) ───────
 _jwks_cache: dict = {}
@@ -307,6 +311,39 @@ def _load_tenant_cache() -> tuple[dict[str, dict], dict[str, dict]]:
         by_name: dict[str, dict] = {}
         by_host: dict[str, dict] = {}
 
+        if AUTH_METADATA_FILE.exists():
+            try:
+                bundle = json.loads(AUTH_METADATA_FILE.read_text(encoding="utf-8"))
+                for item in bundle.get("tenants", []):
+                    tenant_name = str(item.get("tenant_id", "")).strip()
+                    hostname = str(item.get("primary_hostname", "")).strip().split(":")[0]
+                    if not tenant_name or not hostname:
+                        continue
+                    tenant_config = {
+                        "name": tenant_name,
+                        "hostname": hostname,
+                        "login_mode": "keycloak"
+                        if str(item.get("integration_mode", "managed_oidc")).strip() == "managed_oidc"
+                        else "form",
+                        "integration_mode": str(item.get("integration_mode", "managed_oidc")).strip(),
+                        "identity_mode": str(item.get("identity_mode", "managed")).strip(),
+                        "adapter_mode": str(item.get("adapter_mode", "headers")).strip() or "headers",
+                        "status": str(item.get("status", "draft")).strip() or "draft",
+                        "keycloak_client_id": str(item.get("keycloak_client_id", tenant_name)).strip() or tenant_name,
+                        "keycloak_client_secret": "",
+                        "keycloak_realm": str(item.get("keycloak_realm", KC_REALM)).strip() or KC_REALM,
+                        "source": "published_bundle",
+                    }
+                    by_name[tenant_name] = tenant_config
+                    by_host[hostname.lower()] = tenant_config
+            except Exception as exc:
+                _log_event(
+                    logging.WARNING,
+                    "auth_metadata_bundle_unreadable",
+                    auth_metadata_file=str(AUTH_METADATA_FILE),
+                    error=str(exc),
+                )
+
         if TENANTS_DIR.exists():
             for config_path in sorted(TENANTS_DIR.glob("*/config.json")):
                 if config_path.parent.name == "_template":
@@ -326,12 +363,21 @@ def _load_tenant_cache() -> tuple[dict[str, dict], dict[str, dict]]:
                     "name": tenant_name,
                     "hostname": hostname,
                     "login_mode": str(raw_config.get("login_mode", "form")).strip() or "form",
+                    "integration_mode": "managed_oidc"
+                    if str(raw_config.get("login_mode", "form")).strip() == "keycloak"
+                    else "form_bridge",
+                    "identity_mode": "federated_db" if bool(raw_config.get("no_spi", False)) else "managed",
+                    "adapter_mode": "translated_token" if tenant_name == "testapp" else "headers",
+                    "status": "published",
                     "keycloak_client_id": str(raw_config.get("keycloak_client_id", tenant_name)).strip() or tenant_name,
                     "keycloak_client_secret": str(raw_config.get("keycloak_client_secret", "")).strip(),
                     "keycloak_realm": str(raw_config.get("keycloak_realm", KC_REALM)).strip() or KC_REALM,
+                    "source": "legacy_config",
                 }
-                by_name[tenant_name] = tenant_config
-                by_host[hostname.lower()] = tenant_config
+                if tenant_name not in by_name:
+                    by_name[tenant_name] = tenant_config
+                if hostname.lower() not in by_host:
+                    by_host[hostname.lower()] = tenant_config
 
         _tenant_cache_by_name = by_name
         _tenant_cache_by_host = by_host
@@ -342,11 +388,14 @@ def _load_tenant_cache() -> tuple[dict[str, dict], dict[str, dict]]:
 def get_tenant_config(host_header: str = "", tenant_name: str = "") -> dict | None:
     tenants_by_name, tenants_by_host = _load_tenant_cache()
     host_clean = host_header.split(":")[0].strip().lower()
+    tenant = None
     if host_clean and host_clean in tenants_by_host:
-        return tenants_by_host[host_clean]
-    if tenant_name:
-        return tenants_by_name.get(tenant_name)
-    return None
+        tenant = tenants_by_host[host_clean]
+    elif tenant_name:
+        tenant = tenants_by_name.get(tenant_name)
+    if tenant and tenant.get("status") == "disabled":
+        return None
+    return tenant
 
 
 def build_callback_url(request: Request, tenant_name: str = "") -> str:
@@ -356,6 +405,40 @@ def build_callback_url(request: Request, tenant_name: str = "") -> str:
     if tenant_name:
         return f"{base_url}/ztam/auth/callback?tenant={tenant_name}"
     return f"{base_url}/ztam/auth/callback"
+
+
+def _safe_next_url(next_url: str) -> str:
+    if not next_url.startswith("/") or "//" in next_url:
+        return "/"
+    return next_url
+
+
+def build_logged_out_url(request: Request, next_url: str = "/") -> str:
+    host_header = request.headers.get("host", "").split(":")[0].strip()
+    scheme = request.headers.get("x-forwarded-proto") or request.url.scheme or "https"
+    base_url = f"{scheme}://{host_header}" if host_header else ZTAM_PUBLIC_URL.rstrip("/")
+    return f"{base_url}/ztam/logged-out?{urlencode({'next': _safe_next_url(next_url)})}"
+
+
+def build_keycloak_logout_url(
+    request: Request,
+    tenant_config: Optional[dict],
+    *,
+    next_url: str = "/",
+    id_token_hint: str = "",
+) -> str:
+    realm = (tenant_config or {}).get("keycloak_realm", KC_REALM)
+    client_id = (tenant_config or {}).get("keycloak_client_id", KC_CLIENT_ID)
+    params = {
+        "post_logout_redirect_uri": build_logged_out_url(request, next_url),
+        "client_id": client_id,
+    }
+    if id_token_hint:
+        params["id_token_hint"] = id_token_hint
+    return (
+        f"{KC_ISSUER_URL}/realms/{realm}/protocol/openid-connect/logout?"
+        + urlencode(params)
+    )
 
 
 @app.on_event("startup")
@@ -512,11 +595,7 @@ async def ztam_login_post(request: Request) -> Response:
 
     username: str = body.get("username", "").strip()
     password: str = body.get("password", "")
-    next_url: str = body.get("next", "/")
-
-    # Prevent open redirect: only allow relative same-origin paths
-    if not next_url.startswith("/") or "//" in next_url:
-        next_url = "/"
+    next_url: str = _safe_next_url(body.get("next", "/"))
 
     if not username or not password:
         return Response(content='{"error":"Username and password are required"}',
@@ -587,6 +666,17 @@ async def ztam_login_post(request: Request) -> Response:
         max_age=expires_in,
         path="/",
     )
+    id_token = kc_data.get("id_token")
+    if id_token:
+        resp.set_cookie(
+            key=AUTH_ID_COOKIE_NAME,
+            value=id_token,
+            httponly=True,
+            secure=AUTH_COOKIE_SECURE,
+            samesite=AUTH_COOKIE_SAMESITE,
+            max_age=expires_in,
+            path="/",
+        )
     return resp
 
 
@@ -699,18 +789,33 @@ async def logout(request: Request) -> Response:
     else:
         token = request.cookies.get(AUTH_COOKIE_NAME)
 
-    response = Response(content='{"message":"logged out"}', status_code=200,
-                        media_type="application/json")
+    host_header: str = request.headers.get("host", "")
+    tenant_config = get_tenant_config(host_header)
+    id_token_hint = request.cookies.get(AUTH_ID_COOKIE_NAME, "")
+    logout_redirect = build_keycloak_logout_url(
+        request,
+        tenant_config,
+        next_url="/dashboard.html",
+        id_token_hint=id_token_hint,
+    )
+    response = Response(
+        content=json.dumps({"message": "logged out", "logout_url": logout_redirect}),
+        status_code=200,
+        media_type="application/json",
+    )
     response.delete_cookie(key=AUTH_COOKIE_NAME, path="/")
+    response.delete_cookie(key=AUTH_ID_COOKIE_NAME, path="/")
     if not token:
         _log_event(logging.INFO, "logout_without_token", request=request)
         return response
     try:
+        realm = (tenant_config or {}).get("keycloak_realm", KC_REALM)
+        client_id = (tenant_config or {}).get("keycloak_client_id", KC_CLIENT_ID)
         async with httpx.AsyncClient(timeout=5.0) as client:
             await client.post(
-                f"{KEYCLOAK_URL}/realms/{KC_REALM}/protocol/openid-connect/logout",
+                f"{KEYCLOAK_URL}/realms/{realm}/protocol/openid-connect/logout",
                 data={
-                    "client_id":      KC_CLIENT_ID,
+                    "client_id":      client_id,
                     "client_secret":  KC_CLIENT_SECRET,
                     "token_type_hint": "access_token",
                     "token":          token,
@@ -720,6 +825,60 @@ async def logout(request: Request) -> Response:
     except Exception as exc:
         _log_event(logging.WARNING, "logout_keycloak_unreachable", request=request, error=str(exc))
     return response
+
+
+@app.get("/ztam/logout")
+async def browser_logout(request: Request, next: str = "/") -> Response:
+    """
+    Browser logout: clear ZTAM cookies and redirect the browser through
+    Keycloak's logout endpoint so the IdP session is cleared too.
+    """
+    next_url = _safe_next_url(next)
+    host_header: str = request.headers.get("host", "")
+    tenant_config = get_tenant_config(host_header)
+    id_token_hint = request.cookies.get(AUTH_ID_COOKIE_NAME, "")
+    logout_url = build_keycloak_logout_url(
+        request,
+        tenant_config,
+        next_url=next_url,
+        id_token_hint=id_token_hint,
+    )
+    response = Response(status_code=302, headers={"Location": logout_url})
+    response.delete_cookie(key=AUTH_COOKIE_NAME, path="/")
+    response.delete_cookie(key=AUTH_ID_COOKIE_NAME, path="/")
+    _log_event(
+        logging.INFO,
+        "browser_logout_redirected",
+        request=request,
+        redirect_to=logout_url,
+    )
+    return response
+
+
+@app.get("/ztam/logged-out")
+async def logged_out_page(next: str = "/") -> Response:
+    next_url = _safe_next_url(next)
+    html = f"""\
+<!DOCTYPE html><html lang="en"><head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ZTAM - Signed Out</title>
+  <style>
+    body {{ font-family: system-ui, sans-serif; background: #f6f8fb; color: #0f172a;
+      min-height: 100vh; display: flex; align-items: center; justify-content: center; margin: 0; }}
+    .card {{ background: white; border-radius: 14px; box-shadow: 0 18px 50px rgba(15, 23, 42, .08);
+      padding: 2rem; width: min(420px, calc(100vw - 2rem)); text-align: center; }}
+    h1 {{ margin: 0 0 .75rem; font-size: 1.4rem; }}
+    p {{ margin: 0 0 1.25rem; color: #475569; }}
+    a {{ display: inline-block; background: #0f3460; color: white; text-decoration: none;
+      padding: .8rem 1.1rem; border-radius: 10px; font-weight: 600; }}
+  </style>
+</head><body><div class="card">
+  <h1>Signed out</h1>
+  <p>Your ZTAM and Keycloak session has been closed.</p>
+  <a href="/ztam/login?{urlencode({'next': next_url})}">Sign in again</a>
+</div></body></html>
+"""
+    return Response(content=html, media_type="text/html")
 
 
 @app.get("/ztam/login-redirect")
@@ -758,7 +917,7 @@ async def auth_callback(request: Request, code: str, state: str = "/", tenant: s
     """
     tenant_config = get_tenant_config(request.headers.get("host", ""), tenant) or {}
     client_id = tenant_config.get("keycloak_client_id") or tenant or KC_CLIENT_ID
-    client_secret = tenant_config.get("keycloak_client_secret") or ""
+    client_secret = tenant_config.get("keycloak_client_secret") or KC_CLIENT_SECRET
     realm = tenant_config.get("keycloak_realm", KC_REALM)
     token_uri = f"{KEYCLOAK_URL}/realms/{realm}/protocol/openid-connect/token"
     callback_url = build_callback_url(request, tenant_config.get("name", tenant))
@@ -773,8 +932,6 @@ async def auth_callback(request: Request, code: str, state: str = "/", tenant: s
             }
             if client_secret:
                 token_request["client_secret"] = client_secret
-            elif client_id == KC_CLIENT_ID:
-                token_request["client_secret"] = KC_CLIENT_SECRET
 
             resp = await client.post(
                 token_uri,
@@ -783,6 +940,7 @@ async def auth_callback(request: Request, code: str, state: str = "/", tenant: s
             resp.raise_for_status()
             data = resp.json()
             access_token = data["access_token"]
+            id_token = data.get("id_token", "")
 
             # Redirect back to the original page (stored in state)
             response = Response(status_code=302, headers={"Location": state})
@@ -796,6 +954,16 @@ async def auth_callback(request: Request, code: str, state: str = "/", tenant: s
                 samesite=AUTH_COOKIE_SAMESITE,
                 max_age=data.get("expires_in", 3600),
             )
+            if id_token:
+                response.set_cookie(
+                    key=AUTH_ID_COOKIE_NAME,
+                    value=id_token,
+                    httponly=True,
+                    secure=AUTH_COOKIE_SECURE,
+                    samesite=AUTH_COOKIE_SAMESITE,
+                    max_age=data.get("expires_in", 3600),
+                    path="/",
+                )
             _metric_inc("ztam_auth_login_attempts_total", flow="callback", outcome="succeeded")
             _log_event(
                 logging.INFO,
@@ -961,17 +1129,36 @@ async def check(request: Request, full_path: str = ""):
     # ---------- 7. Build OPA input -------------------------------------------
     original_method: str = request.method.upper()
 
+    client_type = "browser" if "text/html" in request.headers.get("accept", "") else "api"
     opa_input = {
         "input": {
-            "user": {
-                "id":        user_id,
-                "email":     email,
-                "roles":     roles,
-                "tenant_id": tenant_id,
+            "tenant": {
+                "id": tenant_id,
+                "integration_mode": (tenant_config or {}).get("integration_mode", "form_bridge"),
+                "identity_mode": (tenant_config or {}).get("identity_mode", "managed"),
+            },
+            "subject": {
+                "id": user_id,
+                "email": email,
+                "roles": roles,
             },
             "request": {
-                "path":   original_path,
+                "path": original_path,
                 "method": original_method,
+            },
+            "client": {
+                "type": client_type,
+                "host": host_clean,
+            },
+            "device": {
+                "posture": "unknown",
+            },
+            # Compatibility bridge while the policy contract migrates.
+            "user": {
+                "id": user_id,
+                "email": email,
+                "roles": roles,
+                "tenant_id": tenant_id,
             },
         }
     }
@@ -1004,7 +1191,8 @@ async def check(request: Request, full_path: str = ""):
         primary_role: str = custom_role if custom_role else (roles[0] if roles else "viewer")
 
         extra_headers: dict = {}
-        if TESTAPP_JWT_SECRET:
+        adapter_mode = (tenant_config or {}).get("adapter_mode", "translated_token" if TESTAPP_JWT_SECRET else "headers")
+        if adapter_mode == "translated_token" and TESTAPP_JWT_SECRET:
             now_ts = int(time.time())
             db_user_id = claims.get("db_user_id") or user_id
             downstream_token = jwt.encode(
@@ -1029,7 +1217,7 @@ async def check(request: Request, full_path: str = ""):
                 role=primary_role,
                 path=original_path,
             )
-            _metric_inc("ztam_auth_decisions_total", outcome="allowed", tenant_id=tenant_id)
+        _metric_inc("ztam_auth_decisions_total", outcome="allowed", tenant_id=tenant_id)
 
         # Build downstream roles list.
         # Prefer the SPI-assigned custom_role (authoritative application role).
