@@ -12,9 +12,9 @@
 #
 # What it does:
 #   1. Creates Keycloak client + roles via Admin REST API
-#   2. Adds permissions to policies/tenants.json (OPA picks them up live)
-#   3. Adds Envoy virtual host + cluster for the new backend
-#   4. Saves tenant config to tenants/<name>/config.json
+#   2. Saves tenant config to tenants/<name>/config.json
+#   3. Regenerates policies/tenants.json from tenant configs
+#   4. Regenerates Envoy tenant routing from tenant configs
 #   5. Reloads Envoy
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
@@ -108,34 +108,64 @@ echo "   ✓ Keycloak admin authenticated"
 echo "[2/5] Registering Keycloak client '${TENANT_NAME}'..."
 
 CLIENT_SECRET="ztam-$(openssl rand -hex 16)"
+CLIENT_PUBLIC="false"
+CLIENT_DIRECT_ACCESS="true"
+
+if [[ "$LOGIN_MODE" == "keycloak" ]]; then
+    CLIENT_PUBLIC="true"
+    CLIENT_DIRECT_ACCESS="false"
+fi
+
+CLIENT_PAYLOAD=$(TENANT_NAME="$TENANT_NAME" \
+HOSTNAME_FQDN="$HOSTNAME_FQDN" \
+LOGIN_MODE="$LOGIN_MODE" \
+CLIENT_SECRET="$CLIENT_SECRET" \
+CLIENT_PUBLIC="$CLIENT_PUBLIC" \
+CLIENT_DIRECT_ACCESS="$CLIENT_DIRECT_ACCESS" \
+ZTAM_PUBLIC_URL="${ZTAM_PUBLIC_URL:-https://localhost}" \
+python3 - <<'PY'
+import json
+import os
+
+payload = {
+    "clientId": os.environ["TENANT_NAME"],
+    "name": os.environ["TENANT_NAME"],
+    "enabled": True,
+    "protocol": "openid-connect",
+    "publicClient": os.environ["CLIENT_PUBLIC"] == "true",
+    "directAccessGrantsEnabled": os.environ["CLIENT_DIRECT_ACCESS"] == "true",
+    "standardFlowEnabled": True,
+    "rootUrl": f"https://{os.environ['HOSTNAME_FQDN']}",
+    "baseUrl": "/",
+    "redirectUris": [
+        f"https://{os.environ['HOSTNAME_FQDN']}/*",
+        f"{os.environ['ZTAM_PUBLIC_URL']}/ztam/auth/callback*",
+    ],
+    "webOrigins": ["*"],
+}
+
+if os.environ["LOGIN_MODE"] != "keycloak":
+    payload["secret"] = os.environ["CLIENT_SECRET"]
+
+print(json.dumps(payload))
+PY
+)
 
 HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
     -H "Authorization: Bearer ${KC_TOKEN}" \
     -H "Content-Type: application/json" \
     "${KC_URL}/admin/realms/${KC_REALM}/clients" \
-    -d "{
-      \"clientId\": \"${TENANT_NAME}\",
-      \"name\": \"${TENANT_NAME}\",
-      \"enabled\": true,
-      \"protocol\": \"openid-connect\",
-      \"publicClient\": false,
-      \"directAccessGrantsEnabled\": true,
-      \"standardFlowEnabled\": true,
-      \"secret\": \"${CLIENT_SECRET}\",
-      \"rootUrl\": \"https://${HOSTNAME_FQDN}\",
-      \"baseUrl\": \"/\",
-      \"redirectUris\": [
-        \"https://${HOSTNAME_FQDN}/*\",
-        \"${ZTAM_PUBLIC_URL:-https://localhost}/api/auth/callback\"
-      ],
-      \"webOrigins\": [\"*\"]
-    }")
+    -d "$CLIENT_PAYLOAD")
 
 if [[ "$HTTP_STATUS" == "409" ]]; then
     echo "   ⚠  Client '${TENANT_NAME}' already exists in Keycloak — skipping creation"
 elif [[ "$HTTP_STATUS" == "201" ]]; then
-    echo "   ✓ Client '${TENANT_NAME}' created (secret: ${CLIENT_SECRET})"
-    echo "   ⚠  Save this client secret — it will not be shown again"
+    if [[ "$LOGIN_MODE" == "keycloak" ]]; then
+        echo "   ✓ Client '${TENANT_NAME}' created (public client for hosted Keycloak login)"
+    else
+        echo "   ✓ Client '${TENANT_NAME}' created (secret: ${CLIENT_SECRET})"
+        echo "   ⚠  Save this client secret — it will not be shown again"
+    fi
     
     # If no-spi is NOT set, we associate the client with the common user-federation
     if [[ "$NO_SPI" == "false" ]]; then
@@ -175,49 +205,34 @@ done
 
 # ── Step 3: OPA permissions ───────────────────────────────────────────────────
 echo "[3/5] Adding OPA permissions for '${TENANT_NAME}'..."
-python3 "$SCRIPT_DIR/opa_add_tenant.py" \
-    --name    "${TENANT_NAME}" \
-    --roles   "${ROLES}" \
-    --tenants "$ROOT_DIR/policies/tenants.json"
-echo "   ✓ policies/tenants.json updated (OPA reloads automatically)"
+echo "   ✓ Tenant policies are generated from tenants/<name>/config.json"
 
 # ── Step 4: Tenant config ─────────────────────────────────────────────────────
 echo "[4/5] Saving tenant config..."
-mkdir -p "$ROOT_DIR/tenants/${TENANT_NAME}"
-
-BACKEND_HOST=$(python3 -c "from urllib.parse import urlparse; u=urlparse('${BACKEND_URL}'); print(u.hostname)")
-BACKEND_PORT=$(python3 -c "from urllib.parse import urlparse; u=urlparse('${BACKEND_URL}'); p=u.port; print(p if p else (443 if u.scheme=='https' else 80))")
-BACKEND_TLS=$(python3 -c "from urllib.parse import urlparse; u=urlparse('${BACKEND_URL}'); print('true' if u.scheme=='https' else 'false')")
-NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-
-cat > "$ROOT_DIR/tenants/${TENANT_NAME}/config.json" <<JSONEOF
-{
-  "name": "${TENANT_NAME}",
-  "backend_url": "${BACKEND_URL}",
-  "backend_host": "${BACKEND_HOST}",
-  "backend_port": ${BACKEND_PORT},
-  "backend_tls": ${BACKEND_TLS},
-  "hostname": "${HOSTNAME_FQDN}",
-  "keycloak_client_id": "${TENANT_NAME}",
-  "keycloak_realm": "${KC_REALM}",
-  "roles": "${ROLES}",
-  "login_mode": "${LOGIN_MODE}",
-  "no_spi": ${NO_SPI},
-  "created_at": "${NOW}"
-}
-JSONEOF
+python3 "$SCRIPT_DIR/tenant_manager.py" upsert \
+        --tenants-dir "$ROOT_DIR/tenants" \
+        --name "${TENANT_NAME}" \
+        --backend-url "${BACKEND_URL}" \
+        --hostname "${HOSTNAME_FQDN}" \
+        --roles "${ROLES}" \
+        --keycloak-client-id "${TENANT_NAME}" \
+        --keycloak-realm "${KC_REALM}" \
+        --login-mode "${LOGIN_MODE}" \
+        $( [[ "$NO_SPI" == "true" ]] && printf '%s' '--no-spi' )
 echo "   ✓ tenants/${TENANT_NAME}/config.json saved"
 
+echo "   Generating policies/tenants.json from tenant configs..."
+python3 "$SCRIPT_DIR/tenant_manager.py" sync-policies \
+        --tenants-dir "$ROOT_DIR/tenants" \
+        --output "$ROOT_DIR/policies/tenants.json"
+echo "   ✓ policies/tenants.json updated (OPA reloads automatically)"
+
 # ── Step 5: Envoy config ──────────────────────────────────────────────────────
-echo "[5/5] Updating Envoy config..."
-python3 "$SCRIPT_DIR/envoy_add_tenant.py" \
-    --name         "${TENANT_NAME}" \
-    --hostname     "${HOSTNAME_FQDN}" \
-    --backend-host "${BACKEND_HOST}" \
-    --backend-port "${BACKEND_PORT}" \
-    --backend-tls  "${BACKEND_TLS}" \
-    --login-mode   "${LOGIN_MODE}" \
-    --envoy-yaml   "$ROOT_DIR/envoy/envoy.yaml"
+echo "[5/5] Rendering Envoy config from tenant definitions..."
+python3 "$SCRIPT_DIR/tenant_manager.py" sync-envoy \
+    --tenants-dir "$ROOT_DIR/tenants" \
+    --envoy-yaml "$ROOT_DIR/envoy/envoy.yaml"
+echo "   ✓ envoy.yaml refreshed from tenant configs"
 
 echo ""
 echo "Reloading Envoy..."
@@ -242,6 +257,6 @@ echo ""
 echo "  Next steps:"
 echo "  1. DNS: Point '${HOSTNAME_FQDN}' to this server's IP"
 echo "  2. Users: Create users in Keycloak and assign the '${TENANT_NAME}' client roles"
-echo "  3. Permissions: Fine-tune  policies/tenants.json → '${TENANT_NAME}' entry"
+echo "  3. Permissions: Fine-tune tenants/${TENANT_NAME}/config.json, then run scripts/tenant_manager.py sync-policies"
 echo "  4. Optional: Read x-user-roles header in your backend for personalisation"
 echo ""

@@ -1,7 +1,7 @@
 # ZTAM Platform — Zero Trust Application Middleware
 
-> Wraps any existing web application behind Keycloak authentication, OPA policy enforcement,
-> and automatic JWT token translation — **without touching the application's source code.**
+> Protects existing web applications behind Keycloak authentication, OPA policy enforcement,
+> and gateway-managed identity translation with minimal application changes.
 
 ```
 Browser ─── HTTPS :443 ──▶ Envoy (TLS termination)
@@ -12,7 +12,7 @@ Browser ─── HTTPS :443 ──▶ Envoy (TLS termination)
                 │                │         ├──▶ OPA (policy decision)
                 │                │         └──▶ Keycloak token endpoint (login)
                 │
-                └──▶ TestApp :3000  (internal only — zero source changes)
+                └──▶ TestApp :3000  (bundled demo app, internal only)
 
 HTTP :80 → 301 redirect → HTTPS :443
 ```
@@ -27,8 +27,8 @@ HTTP :80 → 301 redirect → HTTPS :443
 | `keycloak`        | keycloak:26.5.5            | 8080 (admin only) | Identity provider + session management             |
 | `auth-middleware` | FastAPI / Python 3.12      | — (internal)      | JWT validation + rate limiting + token translation |
 | `opa`             | openpolicyagent/opa:0.64.1 | — (internal)      | Policy engine (Rego rules)                         |
-| `testapp`         | Node.js 20                 | — (internal)      | Protected app — source code untouched              |
-| `testapp-db`      | mysql:8                    | — (internal)      | TestApp's user + task database                     |
+| `testapp`         | Node.js 20                 | — (internal)      | Bundled sample protected app                       |
+| `testapp-db`      | mysql:8                    | — (internal)      | Bundled sample app's user + task database          |
 | `postgres`        | postgres:16                | — (internal)      | Keycloak's internal storage                        |
 
 > All internal services are **not reachable from outside Docker** — only Envoy (443/80) and Keycloak admin (8080) are exposed. This enforces the Zero Trust perimeter.
@@ -99,11 +99,10 @@ TESTAPP_JWT_SECRET=<random-64-chars>
 docker compose up -d --build
 ```
 
-> **Development vs Production:**
-> The `keycloak` service runs with `command: start-dev` by default.
-> `start-dev` is suitable for local testing only.
-> For a production deployment, change it to `start` and provide proper
-> `KC_HOSTNAME`, TLS certificates, and firewall rules to restrict port 8080.
+> **Production mode:** The `keycloak` service runs with `command: start` (production mode, not `start-dev`).
+> This requires `KC_HOSTNAME`, a backing Postgres database, and an HTTP-enabled listener — all of which
+> are already configured in `docker-compose.yml`. For a publicly reachable deployment, also set
+> `KC_ISSUER_URL` and `ZTAM_PUBLIC_URL` in `.env` to the real FQDN, and restrict port 8080 behind a firewall.
 
 Wait ~30 s for Keycloak to finish initializing, then:
 
@@ -113,8 +112,10 @@ Automatically creates the realm, Keycloak client, MySQL SPI registration,
 and JWT protocol mappers, then smoke-tests the full login flow:
 
 ```bash
-python3 setup_demo.py
+python3 demo/setup_demo.py
 ```
+
+The root-level `setup_demo.py` wrapper still works for backward compatibility.
 
 ### 6 — Open the app
 
@@ -128,7 +129,7 @@ HTTP requests to `http://localhost` are automatically redirected to HTTPS.
 
 ## Test Users
 
-All users live in TestApp's MySQL DB. Keycloak reads and authenticates them via the SPI.
+All users live in the bundled demo app's MySQL DB. Keycloak reads and authenticates them via the SPI.
 
 | Username   | Password    | Role      | What they see            |
 | ---------- | ----------- | --------- | ------------------------ |
@@ -143,7 +144,55 @@ All users live in TestApp's MySQL DB. Keycloak reads and authenticates them via 
 
 ZTAM is designed for multi-tenancy. You can onboard any number of client applications in seconds.
 
+Core docs by audience:
+
+- Demo and review: `DEMO_PRESENTATION_GUIDE.md`, `PROJECT_EXPLANATION.md`, `ARCHITECTURE.md`
+- Operators: `ONBOARDING_PLAYBOOK.md`, `CLIENT_INTEGRATION_PATTERNS.md`, `DEPLOYMENT.md`, `GO_LIVE_CHECKLIST.md`
+- Governance: `INTEGRATION_CONTRACT.md`, `TENANT_CHANGE_POLICY.md`, `OBSERVABILITY_RUNBOOK.md`
+- Delivery and roadmap: `CUSTOMER_HANDOFF_TEMPLATE.md`, `EXECUTION_PLAN.md`, `ENTERPRISE_ROADMAP.md`
+
+### Tomorrow's first-client path
+
+If you are onboarding a real client, do not start by hand-editing configs.
+
+Use this order:
+
+1. Read `CLIENT_INTEGRATION_PATTERNS.md` to classify the client type.
+2. Run `python3 scripts/tenant_manager.py assess --backend-url <client-url> --name <tenant> --hostname <host> --roles "admin,manager,user" --write-config`.
+3. Confirm the recommended login mode, role list, and any redirect or cookie risks.
+4. Follow `ONBOARDING_PLAYBOOK.md` for tenant creation, validation, smoke test, and handoff.
+5. Do not release until `GO_LIVE_CHECKLIST.md` is closed.
+
+### Optional observability profile
+
+To run the local monitoring stack:
+
+```bash
+docker compose --profile observability up -d prometheus grafana
+```
+
+Endpoints:
+
+- Prometheus: `http://127.0.0.1:9090`
+- Grafana: `http://127.0.0.1:3001`
+
+Default Grafana login:
+
+- username: `admin`
+- password: `change_me_grafana` unless overridden in `.env`
+
+Prometheus scrapes the auth-middleware `/metrics` endpoint on the internal Docker network.
+Grafana auto-provisions the Prometheus datasource and a starter dashboard named `ZTAM Overview`.
+
+Tenant config is now the source of truth for onboarding:
+
+- `tenants/<name>/config.json` stores backend metadata, login mode, roles, and tenant-specific permissions
+- `python3 scripts/tenant_manager.py validate` checks tenant definitions before apply
+- `python3 scripts/tenant_manager.py sync-policies` regenerates `policies/tenants.json` from tenant configs
+- `python3 scripts/tenant_manager.py sync-envoy` regenerates tenant routes/clusters in `envoy/envoy.yaml`
+
 ### Case A: App with its own Login Page
+
 Uses the **Form Login Mode** (default). ZTAM intercepts the login POST and translates it to Keycloak.
 
 ```bash
@@ -154,6 +203,7 @@ Uses the **Form Login Mode** (default). ZTAM intercepts the login POST and trans
 ```
 
 ### Case B: App with NO Login Page
+
 Uses the **Keycloak Login Mode**. Unauthenticated users are redirected to Keycloak's own login UI.
 
 ```bash
@@ -165,9 +215,55 @@ Uses the **Keycloak Login Mode**. Unauthenticated users are redirected to Keyclo
   --no-spi
 ```
 
+### Case C: Client Wants Existing Users From Their Own Database
+
+If the client wants ZTAM or Keycloak to authenticate against their existing MySQL or PostgreSQL user database, treat that as a federation decision, not just a routing decision.
+
+Collect these inputs first:
+
+- DB engine, host, port, and database name
+- a dedicated read-only DB username and password
+- users table name
+- username or email column
+- password hash column
+- role column if available
+- hash algorithm, preferably bcrypt
+
+Use `CLIENT_INTEGRATION_PATTERNS.md` to decide whether DB federation is actually required for that tenant.
+
 ### Offboarding a Tenant
+
 ```bash
 ./scripts/offboard-tenant.sh --name myapp
+```
+
+### Validate the current onboarding model
+
+```bash
+python3 scripts/tenant_manager.py validate
+python3 scripts/tenant_manager.py list
+python3 scripts/tenant_manager.py assess --backend-url https://store-app-wmzx.onrender.com
+python3 scripts/smoke_test_tenant.py --base-url https://store.ztam.local --protected-path /admin --username admin --password admin123 --expect-text "Admin Dashboard" --insecure
+python3 scripts/smoke_test_tenant.py --base-url https://localhost --host-header newtenant.yourdomain.com --protected-path / --login-mode keycloak --insecure
+python3 scripts/validate_deployment.py --env-file .env --cert-dir envoy/certs
+cat GO_LIVE_CHECKLIST.md
+```
+
+Teacher/demo shortcut:
+
+```bash
+./scripts/demo_teacher_flow.sh
+```
+
+To generate a starter tenant config dynamically from a client URL:
+
+```bash
+python3 scripts/tenant_manager.py assess \
+  --backend-url https://app.customer.com \
+  --name customerapp \
+  --hostname customerapp.yourdomain.com \
+  --roles "admin,manager,user" \
+  --write-config
 ```
 
 ---
@@ -187,6 +283,7 @@ For full production setup instructions (TLS via Let's Encrypt, DNS, Hardening), 
 **Keycloak admin login:** `admin` / `<KC_ADMIN_PASS from .env>`
 
 OPA, auth-middleware, and testapp are **not** exposed externally — Zero Trust perimeter.
+The optional observability profile exposes Prometheus and Grafana on loopback only for local review.
 
 ---
 
@@ -233,6 +330,7 @@ Rules are in `policies/authz.rego`. Permissions are in `policies/permissions.jso
 
 ```
 ztam-platform/
+├── *.md                        # Operator, architecture, demo, and handoff docs
 ├── envoy/
 │   ├── envoy.yaml              # Routing, TLS, ext_authz, security headers
 │   ├── generate-certs.sh       # Self-signed TLS cert generator
@@ -251,13 +349,35 @@ ztam-platform/
 │       ├── main.py              # /login-proxy + ext_authz handler + rate limiter
 │       ├── requirements.txt
 │       └── Dockerfile
-├── testapp/                    # Protected app — source code untouched
+├── demo/
+│   ├── testapp/                # Bundled sample protected app
+│   ├── setup_demo.py           # Demo Keycloak bootstrap + smoke test
+│   ├── demo_test.sh            # Demo helper script
+│   └── README.md               # Demo-vs-platform boundary
 ├── docker-compose.yml
 ├── .env                        # Secrets — never committed
 ├── .env.example
-├── setup_demo.py               # One-time Keycloak priming script
+├── setup_demo.py               # Compatibility wrapper → demo/setup_demo.py
+├── demo_test.sh                # Compatibility wrapper → demo/demo_test.sh
 └── ARCHITECTURE.md             # Detailed component + flow documentation
 ```
+
+Repo layout by purpose:
+
+- Root: platform entrypoints, deployment files, and the small set of docs you need during onboarding, review, and handoff.
+- `demo/`: bundled sample app and demo-only helpers.
+- `services/`, `envoy/`, `policies/`, `scripts/`, `tenants/`: the real platform runtime and operator workflow.
+- `keycloak-db-spi/`: isolated Java extension project for the demo identity bridge.
+
+Important root docs:
+
+- `README.md`: start here for setup and operator shortcuts
+- `ARCHITECTURE.md`: request flow and component model
+- `DEMO_PRESENTATION_GUIDE.md`: tomorrow-ready presentation script
+- `PROJECT_EXPLANATION.md`: full project narrative in plain language
+- `INTEGRATION_CONTRACT.md`: realistic client integration expectations
+
+If you use this repo in VS Code, the workspace hides `.venv`, `__pycache__`, `target`, and `build-verify` so the explorer stays focused on source files.
 
 ---
 

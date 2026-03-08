@@ -32,13 +32,17 @@ app.use(express.json({ limit: "100kb" })); // prevent oversized JSON payloads
 // Serve frontend static files from ../frontend
 app.use(express.static(path.join(__dirname, "..", "frontend")));
 
+app.get("/", (req, res) => {
+  res.redirect("/dashboard.html");
+});
+
 // ── API Routes ────────────────────────────────────────────────────────────────
 app.use("/api/auth", authRoutes);
 app.use("/api/tasks", taskRoutes);
 
-// ── Fallback: serve login page ────────────────────────────────────────────────
+// ── Fallback: serve dashboard shell ───────────────────────────────────────────
 app.get("*", (req, res) => {
-  res.sendFile(path.join(__dirname, "..", "frontend", "login.html"));
+  res.sendFile(path.join(__dirname, "..", "frontend", "dashboard.html"));
 });
 
 // ── Start ─────────────────────────────────────────────────────────────────────

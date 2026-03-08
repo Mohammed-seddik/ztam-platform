@@ -2,13 +2,43 @@
   "name": "REPLACE_ME",
   "display_name": "My Application",
   "backend_url": "https://myapp.railway.app",
-  "backend_host": "myapp.railway.app",
-  "backend_port": 443,
-  "backend_tls": true,
   "hostname": "myapp.yourdomain.com",
   "keycloak_client_id": "REPLACE_ME",
   "keycloak_realm": "REPLACE_ME",
-  "roles": "admin,user,viewer",
+  "roles": [
+    "admin",
+    "user",
+    "viewer"
+  ],
+  "login_mode": "form",
+  "no_spi": false,
+  "permissions": {
+    "user": {
+      "allowed_paths": [
+        "/api/"
+      ],
+      "denied_paths": [
+        "/admin/",
+        "/admin"
+      ],
+      "allowed_methods": [
+        "GET",
+        "POST"
+      ]
+    },
+    "viewer": {
+      "allowed_paths": [
+        "/api/"
+      ],
+      "denied_paths": [
+        "/admin/",
+        "/admin"
+      ],
+      "allowed_methods": [
+        "GET"
+      ]
+    }
+  },
   "created_at": "YYYY-MM-DDT00:00:00Z",
-  "notes": "Copy this file to tenants/<name>/config.json or use onboard-tenant.sh to generate it automatically."
+  "notes": "Copy this file to tenants/<name>/config.json or use scripts/tenant_manager.py / onboard-tenant.sh to generate it automatically."
 }

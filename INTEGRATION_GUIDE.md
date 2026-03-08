@@ -1,5 +1,6 @@
 # ZTAM Integration Guide
-## Selling & Onboarding Any Client App — Zero Code Required
+
+## Selling & Onboarding Client Apps With Minimal Changes
 
 ---
 
@@ -7,26 +8,28 @@
 
 ZTAM (Zero Trust Access Management) sits in front of **any web app** and handles:
 
-| What we provide | What the client needs to do |
-|---|---|
-| SSL/TLS termination (HTTPS) | Nothing |
-| Login / logout via Keycloak | Nothing |
-| JWT validation on every request | Nothing |
-| Role-based access control (OPA) | Define their roles once |
-| Rate-limiting & security headers | Nothing |
-| User identity headers to backend | Optionally read them |
+| What we provide                  | What the client needs to do |
+| -------------------------------- | --------------------------- |
+| SSL/TLS termination (HTTPS)      | Nothing                     |
+| Login / logout via Keycloak      | Nothing                     |
+| JWT validation on every request  | Nothing                     |
+| Role-based access control (OPA)  | Define their roles once     |
+| Rate-limiting & security headers | Nothing                     |
+| User identity headers to backend | Optionally read them        |
 
-The client's app **does not need to change its code**. It just sits behind ZTAM and receives trusted HTTP headers on every request.
+The client's app often needs little or no code change, but you should not promise zero effort before checking redirects, cookies, login assumptions, and routing behavior.
+
+For the operator decision model, use `CLIENT_INTEGRATION_PATTERNS.md` together with `ONBOARDING_PLAYBOOK.md`.
 
 ---
 
 ## The 5-Minute Pitch
 
-> "Your app is currently unprotected. Anyone can hit your API directly.
-> We put our service in front of it — all traffic goes through a TLS-terminating
-> reverse proxy that validates JWTs, enforces role-based access, and forwards
-> clean user-identity headers to your backend.
-> No code changes. DNS change + 30-second config. Done."
+> "Your app is currently exposed directly.
+> We place a security layer in front of it that centralizes authentication,
+> route-level authorization, HTTPS, and trusted identity forwarding.
+> In many cases the app needs little or no code change, but we validate the
+> integration pattern first instead of guessing."
 
 ---
 
@@ -57,15 +60,28 @@ The client's app **does not need to change its code**. It just sits behind ZTAM 
 ```
 
 Each client gets their own:
+
 - **Keycloak client** in the shared realm
 - **Hostname / subdomain** → `clientname.yourdomain.com`
-- **Permissions entry** in `policies/tenants.json`
+- **Tenant config** in `tenants/<name>/config.json`
+- **Generated policy entry** in `policies/tenants.json`
+
+For a real client engagement, use `ONBOARDING_PLAYBOOK.md` as the operator checklist.
+Use `GO_LIVE_CHECKLIST.md` for final production sign-off.
 
 ---
 
 ## Onboarding a New Client — Step by Step
 
+Before onboarding, classify the client using `CLIENT_INTEGRATION_PATTERNS.md`.
+
+That prevents the two most common mistakes:
+
+1. choosing `form` mode for an app that should really use `keycloak`
+2. promising DB-backed credential reuse without confirming the database contract
+
 ### Prerequisites
+
 - ZTAM is running (`docker compose up -d`)
 - `.env` file is populated (see `.env.example`)
 - The client's backend app is accessible at a URL (public or private)
@@ -77,21 +93,46 @@ Each client gets their own:
   --name     myapp                         \
   --backend  https://myapp.railway.app     \
   --hostname myapp.yourdomain.com          \
-  --roles    "admin,manager,user,viewer"   \
-  --login-mode keycloak                    \ # Optional: keycloak | form (default)
-  --no-spi                                   # Optional: skip external DB
+  --roles    "admin,manager,user,viewer"
+
+# Optional flags:
+#   --login-mode keycloak   # Hosted Keycloak login instead of ZTAM form login
+#   --no-spi                # Skip external DB/SPI assumptions
 ```
 
 That's it. The script:
+
 1. Creates a Keycloak client `myapp` with the specified roles
-2. Adds permissions to `policies/tenants.json` (OPA picks them up in < 1s)
-3. Adds an Envoy virtual host and cluster for `myapp.railway.app`
-4. Saves the tenant config to `tenants/myapp/config.json`
+2. Saves the tenant config to `tenants/myapp/config.json`
+3. Regenerates `policies/tenants.json` from all tenant configs
+4. Regenerates tenant routes and clusters in `envoy/envoy.yaml`
 5. Reloads Envoy
+
+### Source of truth
+
+The important rule is this:
+
+- `tenants/<name>/config.json` is the source of truth
+- `policies/tenants.json` is generated from tenant configs
+- tenant routes/clusters in `envoy/envoy.yaml` are generated from tenant configs
+- onboarding validates tenant configs before they are trusted operationally
+
+Useful commands:
+
+```bash
+python3 scripts/tenant_manager.py validate
+python3 scripts/tenant_manager.py list
+python3 scripts/tenant_manager.py sync-policies
+python3 scripts/tenant_manager.py sync-envoy
+python3 scripts/smoke_test_tenant.py --base-url https://myapp.yourdomain.com --protected-path /
+python3 scripts/smoke_test_tenant.py --base-url https://localhost --host-header myapp.yourdomain.com --protected-path / --login-mode keycloak --insecure
+python3 scripts/validate_deployment.py --env-file .env --cert-dir envoy/certs
+```
 
 ### What the client sees
 
 After DNS change (`myapp.yourdomain.com → your-server-ip`):
+
 - `https://myapp.yourdomain.com/api/auth/login` → login endpoint
 - `https://myapp.yourdomain.com/**` → requires JWT, enforced by ZTAM
 - Their backend receives every authenticated request with these headers:
@@ -151,38 +192,42 @@ After DNS change (`myapp.yourdomain.com → your-server-ip`):
   --roles    "admin,owner,accountant,employee,auditor"
 ```
 
-Then customize `policies/tenants.json` to define exactly what each role can access:
+Then customize `tenants/acmecorp/config.json` to define exactly what each role can access, then regenerate the policy file:
 
 ```json
 {
-  "acmecorp": {
-    "roles": {
-      "owner": {
-        "allowed_paths":   ["/api/"],
-        "denied_paths":    [],
-        "allowed_methods": ["GET", "POST", "PUT", "PATCH", "DELETE"]
-      },
-      "accountant": {
-        "allowed_paths":   ["/api/invoices/", "/api/reports/"],
-        "denied_paths":    ["/api/users/", "/api/admin/"],
-        "allowed_methods": ["GET", "POST"]
-      },
-      "employee": {
-        "allowed_paths":   ["/api/timesheets/", "/api/profile/"],
-        "denied_paths":    ["/api/admin/"],
-        "allowed_methods": ["GET", "POST", "PUT"]
-      },
-      "auditor": {
-        "allowed_paths":   ["/api/"],
-        "denied_paths":    ["/api/admin/"],
-        "allowed_methods": ["GET"]
-      }
+  "name": "acmecorp",
+  "roles": ["admin", "owner", "accountant", "employee", "auditor"],
+  "permissions": {
+    "owner": {
+      "allowed_paths": ["/api/"],
+      "denied_paths": [],
+      "allowed_methods": ["GET", "POST", "PUT", "PATCH", "DELETE"]
+    },
+    "accountant": {
+      "allowed_paths": ["/api/invoices/", "/api/reports/"],
+      "denied_paths": ["/api/users/", "/api/admin/"],
+      "allowed_methods": ["GET", "POST"]
+    },
+    "employee": {
+      "allowed_paths": ["/api/timesheets/", "/api/profile/"],
+      "denied_paths": ["/api/admin/"],
+      "allowed_methods": ["GET", "POST", "PUT"]
+    },
+    "auditor": {
+      "allowed_paths": ["/api/"],
+      "denied_paths": ["/api/admin/"],
+      "allowed_methods": ["GET"]
     }
   }
 }
 ```
 
-**OPA reloads the file automatically** — no restart needed.
+```bash
+python3 scripts/tenant_manager.py sync-policies
+```
+
+**OPA reloads the generated file automatically** — no restart needed.
 
 ---
 
@@ -192,7 +237,7 @@ Then customize `policies/tenants.json` to define exactly what each role can acce
 
 Solution: Disable auth enforcement for all routes (public mode):
 
-In `policies/tenants.json`, give the `public` role access to everything, then in Envoy's virtual host for this tenant, disable ext_authz globally.
+In `tenants/<name>/config.json`, give the `public` role access to everything, regenerate `policies/tenants.json`, then disable ext_authz for that tenant route if you truly want public mode.
 
 Or simpler: in `envoy/envoy.yaml`, find their virtual host and add `disabled: true` on the catch-all route:
 
@@ -210,9 +255,37 @@ Or simpler: in `envoy/envoy.yaml`, find their virtual host and add `disabled: tr
 
 They get TLS, security headers, and rate-limiting (from Envoy), but NO JWT enforcement.
 
+This should be treated as reduced-scope integration, not the main ZTAM model.
+
 ---
 
-### Case 5: Multiple Apps for the Same Client (Sub-Apps)
+### Case 5: Client Has Existing Users In Its Own Database
+
+If the customer wants existing usernames and passwords to keep working through ZTAM, you need an identity decision, not just a routing decision.
+
+Recommended model:
+
+- Keycloak remains the identity provider and session issuer
+- Keycloak reads the client DB through the SPI using a read-only account
+- password verification is done against the stored password hash
+- ZTAM continues to enforce policy and forward trusted identity to the backend
+
+Collect this before committing to DB-backed login:
+
+- DB engine: MySQL or PostgreSQL
+- host, port, and database name
+- read-only DB username and password
+- users table name
+- username or email column
+- password hash column
+- role column if present
+- hash algorithm, ideally bcrypt
+
+If the client cannot provide those details, onboard the app first without DB federation or stop the auth integration until the contract is clear.
+
+---
+
+### Case 6: Multiple Apps for the Same Client (Sub-Apps)
 
 **Client**: "We have a main app at `/` and an admin panel at `/admin/`"
 
@@ -237,16 +310,18 @@ routes:
 **No library needed.** Their backend just reads HTTP headers:
 
 **Node.js (Express):**
+
 ```js
-app.get('/api/dashboard', (req, res) => {
-  const userId   = req.headers['x-user-id'];
-  const roles    = req.headers['x-user-roles']?.split(',');
-  const tenantId = req.headers['x-tenant-id'];
+app.get("/api/dashboard", (req, res) => {
+  const userId = req.headers["x-user-id"];
+  const roles = req.headers["x-user-roles"]?.split(",");
+  const tenantId = req.headers["x-tenant-id"];
   res.json({ message: `Hello user ${userId} with roles ${roles}` });
 });
 ```
 
 **Python (Flask/FastAPI):**
+
 ```python
 @app.get("/api/dashboard")
 def dashboard(request: Request):
@@ -257,6 +332,7 @@ def dashboard(request: Request):
 ```
 
 **PHP:**
+
 ```php
 $userId = $_SERVER['HTTP_X_USER_ID'];
 $roles  = explode(',', $_SERVER['HTTP_X_USER_ROLES']);
@@ -266,7 +342,7 @@ $roles  = explode(',', $_SERVER['HTTP_X_USER_ROLES']);
 
 ## Permission Reference
 
-### `policies/tenants.json` Structure
+### Generated `policies/tenants.json` Structure
 
 ```json
 {
@@ -291,7 +367,7 @@ $roles  = explode(',', $_SERVER['HTTP_X_USER_ROLES']);
 
 ### Hot Reload
 
-OPA reloads the file automatically — no restart required. Safe to edit live.
+OPA reloads the generated file automatically — no restart required after `sync-policies`.
 
 > [!TIP]
 > **What about other Databases (PostgreSQL, Oracle, SQL Server)?**
@@ -340,7 +416,7 @@ curl -H "Authorization: Bearer $TOKEN" https://demo.yourdomain.com/api/tasks
 
 ### 4. Show role-based access (live, no restart)
 
-Edit `policies/tenants.json`: remove `DELETE` from `user` role → save.
+Edit `tenants/demo/config.json`: remove `DELETE` from `user` role permissions, then run `python3 scripts/tenant_manager.py sync-policies`.
 
 ```bash
 # As alice (user role) — DELETE now blocked instantly
@@ -353,24 +429,25 @@ curl -X DELETE -H "Authorization: Bearer $TOKEN" \
 
 ## Files Reference
 
-| File | Purpose |
-|---|---|
-| `scripts/onboard-tenant.sh` | Main onboarding automation |
-| `scripts/opa_add_tenant.py` | Adds tenant entry to `policies/tenants.json` |
-| `scripts/envoy_add_tenant.py` | Adds Envoy vhost + cluster for the new backend |
-| `policies/tenants.json` | Per-tenant role → permission mapping (hot-reload) |
-| `policies/permissions.json` | Global fallback permissions |
-| `tenants/<name>/config.json` | Saved metadata per onboarded tenant |
-| `envoy/envoy.yaml` | Envoy routing config (modified by onboard script) |
+| File                             | Purpose                                                        |
+| -------------------------------- | -------------------------------------------------------------- |
+| `scripts/smoke_test_tenant.py`   | Acceptance smoke test for an onboarded tenant                  |
+| `scripts/validate_deployment.py` | Production/deployment audit for env and TLS inputs             |
+| `scripts/onboard-tenant.sh`      | Main onboarding automation                                     |
+| `scripts/tenant_manager.py`      | Validates tenant configs and generates policies and Envoy data |
+| `policies/tenants.json`          | Generated per-tenant role → permission mapping (hot-reload)    |
+| `policies/permissions.json`      | Global fallback permissions                                    |
+| `tenants/<name>/config.json`     | Source-of-truth tenant definition                              |
+| `envoy/envoy.yaml`               | Envoy routing config with generated tenant sections            |
 
 ---
 
 ## Pricing / Tiers (Example Positioning)
 
-| Tier | Included |
-|---|---|
-| **Starter** | 1 tenant, ZTAM-managed Keycloak, up to 3 roles |
-| **Pro** | 5 tenants, custom roles, live permission editing |
+| Tier           | Included                                                  |
+| -------------- | --------------------------------------------------------- |
+| **Starter**    | 1 tenant, ZTAM-managed Keycloak, up to 3 roles            |
+| **Pro**        | 5 tenants, custom roles, live permission editing          |
 | **Enterprise** | Unlimited tenants, custom domain, SLA, dedicated instance |
 
 What justifies the price: eliminates weeks of auth/security plumbing, passes audits (HSTS, CSP, rate-limiting), single point of enforcement = one audit target.

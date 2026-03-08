@@ -48,16 +48,18 @@ Browser ─ HTTP  :80  ───►│  │  TLS termination  │◄────
 - Injects headers returned by auth-middleware into forwarded requests
 - **`failure_mode_allow: false`** — if auth-middleware is unreachable, all requests are denied
 
-**Route table (in priority order):**
+**Route table (in priority order, any method unless noted):**
 
 | Match                     | Destination                      | ext_authz                              |
 | ------------------------- | -------------------------------- | -------------------------------------- |
-| `GET /`                   | TestApp                          | **disabled** (serve login page freely) |
-| `GET /login.html`         | TestApp                          | **disabled**                           |
-| `GET /dashboard.html`     | TestApp                          | **disabled**                           |
-| `GET /register.html`      | TestApp                          | **disabled**                           |
-| `POST /api/auth/login`    | Auth Middleware (`/login-proxy`) | **disabled**                           |
-| `POST /api/auth/register` | TestApp                          | **disabled**                           |
+| `prefix /ztam/`           | Auth Middleware (platform login) | **disabled** — serves ZTAM login page  |
+| `path /`                  | TestApp                          | **disabled** (serve login page freely) |
+| `path /login.html`        | TestApp                          | **disabled**                           |
+| `prefix /dashboard.html`  | TestApp                          | **disabled**                           |
+| `prefix /register.html`   | TestApp                          | **disabled**                           |
+| `path /api/auth/login`    | Auth Middleware (`/login-proxy`) | **disabled**                           |
+| `path /api/auth/register` | TestApp                          | **disabled**                           |
+| `path /api/auth/logout`   | Auth Middleware (`/logout`)      | **disabled**                           |
 | Everything else           | TestApp                          | **ENABLED** ← enforced                 |
 
 ---
@@ -92,18 +94,17 @@ calls can be validated against Keycloak's JWKS.
 Called by Envoy for every other request. Validates the incoming token and decides allow/deny.
 
 ```
-1. Extract Bearer token from Authorization header  →  401 if missing
-2. Fetch Keycloak JWKS (cached 5 min)
-3. Validate RS256 signature + expiry               →  403 if invalid
-4. Extract: sub, email, roles, tenant_id, db_user_id
-5. Build device context from x-device-id header
-6. POST to OPA /v1/data/authz/allow
-7. If OPA allows:
+1. Extract Bearer token from Authorization header OR ztam_auth cookie  →  401/redirect if missing
+2. Fetch Keycloak JWKS (cached 5 min, lock-protected)
+3. Validate RS256 signature + expiry + issuer                          →  403 if invalid
+4. Extract: sub, email, roles, tenant_id, azp
+   (device trust is intentionally deferred to Phase 2)
+5. POST to OPA /v1/data/authz  (single call — returns both allow + deny_reason)
+6. If OPA allows:
      - Mint HS256 token with TestApp's JWT_SECRET
      - Return 200 + headers: x-user-id, x-user-roles, x-tenant-id, authorization: Bearer <HS256>
-8. If OPA denies:
-     - Fetch deny_reason from OPA
-     - Return 403 { "error": "access denied", "reason": "..." }
+7. If OPA denies:
+     - Return 403 { "error": "access denied", "reason": "<deny_reason from same OPA response>" }
 ```
 
 ---
@@ -170,7 +171,7 @@ These become JWT claims via the protocol mappers configured in `setup_demo.py`.
 
 **Role:** Policy Decision Point. Evaluates rules against `{ user, request, device }`.
 
-**Input shape:**
+**Input shape (Phase 1 — device trust is Phase 2):**
 
 ```json
 {
@@ -184,37 +185,32 @@ These become JWT claims via the protocol mappers configured in `setup_demo.py`.
     "request": {
       "path": "/api/tasks",
       "method": "GET"
-    },
-    "device": {
-      "id": "device-001",
-      "score": 90,
-      "encrypted": true
     }
   }
 }
 ```
 
-**Decision logic (`authz.rego`):**
+**Decision logic (`authz.rego`) — Phase 1:**
 
 ```
-allow = true  iff  role_permitted AND device_ok
+allow = true  iff  user.id != ""  AND  roles not empty  AND  role_permitted
 
 role_permitted:
-  - "admin" in roles  → always true
-  - other roles       → look up permissions.json: path matches allowed_paths
+  - "admin" in roles  → always true (full access)
+  - other roles       → look up tenant permissions (tenants.json) or global defaults (permissions.json):
+                        path matches allowed_paths
                         AND method in allowed_methods
                         AND path NOT in denied_paths
 
-device_ok:
-  - path starts with /admin/  → score >= 80 AND encrypted = true
-  - all other paths           → score >= 60
+# device_ok is intentionally excluded from Phase 1.
+# Phase 2 will add real device trust-store integration.
 ```
 
 **Permissions are in `policies/permissions.json`** — OPA hot-reloads this file, no restart needed.
 
 ---
 
-### 6. TestApp (`testapp/`)
+### 6. TestApp (`demo/testapp/`)
 
 **Role:** The demo application being protected. Node.js task manager with MySQL backend.
 
@@ -284,8 +280,8 @@ Browser     Envoy        Auth Middleware       OPA          TestApp
   │            │                 │─ validate sig  │              │
   │            │                 │  via JWKS      │              │
   │            │                 │               │              │
-  │            │                 │─ POST /v1/data/authz/allow ──►│
-  │            │                 │◄─ { result: true } ──────────│
+  │            │                 │─ POST /v1/data/authz ─────────►│
+  │            │                 │◄─ { result: {allow:true} } ──│
   │            │                 │               │              │
   │            │                 │  mint HS256 token            │
   │            │◄── 200 ────────│               │              │
@@ -307,11 +303,10 @@ Browser     Envoy        Auth Middleware       OPA
   │  Bearer    │                 │               │
   │  RS256 ───►│                 │               │
   │            │── ext_authz ───►│               │
-  │            │                 │─ POST /v1/data/authz/allow ──►│
-  │            │                 │  (role=user, path=/admin/)     │
-  │            │                 │◄─ { result: false } ──────────│
-  │            │                 │─ POST /v1/data/authz/deny_reason►│
-  │            │                 │◄─ "role does not have permission"│
+  │            │                 │─ POST /v1/data/authz ─────────►│
+  │            │                 │  (role=user, path=/admin/)       │
+  │            │                 │◄─ {allow:false,                  │
+  │            │                 │    deny_reason:"role does not..."}│
   │            │◄── 403 ────────│               │
   │            │  {"error":"access denied",      │
   │            │   "reason":"role does not..."}  │

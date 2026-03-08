@@ -65,6 +65,8 @@ services:
 
   auth-middleware:
     build: ./services/auth-middleware
+    volumes:
+      - ./tenants:/app/tenants:ro
     environment:
       KEYCLOAK_URL: http://keycloak:8080
       # KC_ISSUER_URL: the public-facing URL Keycloak stamps in JWT iss claims.
@@ -75,6 +77,7 @@ services:
       KC_CLIENT_SECRET: ${KC_CLIENT_SECRET}
       OPA_URL: http://opa:8181
       TESTAPP_JWT_SECRET: ${TESTAPP_JWT_SECRET}
+      TENANTS_DIR: /app/tenants
     # No external port: only Envoy calls auth-middleware via ext_authz on the internal network.
     # Exposing this port would allow bypassing the policy engine entirely.
     networks: [ztam]
@@ -113,7 +116,7 @@ services:
       MYSQL_USER: ${MYSQL_USER}
       MYSQL_PASSWORD: ${MYSQL_PASSWORD}
     volumes:
-      - ./testapp/schema.sql:/docker-entrypoint-initdb.d/schema.sql
+      - ./demo/testapp/schema.sql:/docker-entrypoint-initdb.d/schema.sql
       - testapp-db-data:/var/lib/mysql
     networks: [ztam]
     restart: unless-stopped
@@ -124,7 +127,7 @@ services:
       retries: 15
 
   testapp:
-    build: ./testapp
+    build: ./demo/testapp
     # No external port: all traffic must go through Envoy (which enforces ZTAM auth).
     # Exposing port 3001 would allow unauthenticated direct access to the API.
     environment:
@@ -147,6 +150,42 @@ services:
       timeout: 5s
       retries: 10
 
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+    networks: [ztam]
+    restart: unless-stopped
+    profiles: [observability]
+    depends_on:
+      auth-middleware:
+        condition: service_healthy
+
+  grafana:
+    image: grafana/grafana:11.1.4
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-change_me_grafana}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    ports:
+      - "127.0.0.1:3001:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./monitoring/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+    networks: [ztam]
+    restart: unless-stopped
+    profiles: [observability]
+    depends_on:
+      prometheus:
+        condition: service_started
+
 networks:
   ztam:
     driver: bridge
@@ -154,3 +193,5 @@ networks:
 volumes:
   pg-data:
   testapp-db-data:
+  prometheus-data:
+  grafana-data:

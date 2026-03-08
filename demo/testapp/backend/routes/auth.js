@@ -3,6 +3,7 @@ const router = require("express").Router();
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
 const db = require("../db");
+const authenticate = require("../middleware/auth");
 
 const SALT_ROUNDS = 12;
 
@@ -135,6 +136,22 @@ router.post("/login", async (req, res) => {
     console.error("Login error:", err);
     return res.status(500).json({ error: "Internal server error." });
   }
+});
+
+router.get("/session", authenticate, (req, res) => {
+  const forwardedRoles = String(req.headers["x-user-roles"] || "");
+  const roles = forwardedRoles
+    ? forwardedRoles
+        .split(",")
+        .map((role) => role.trim())
+        .filter(Boolean)
+    : [req.user.role].filter(Boolean);
+
+  return res.json({
+    username: req.user.username,
+    role: req.user.role,
+    roles,
+  });
 });
 
 module.exports = router;

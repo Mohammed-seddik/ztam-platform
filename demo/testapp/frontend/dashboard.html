@@ -185,51 +185,51 @@
 </main>
 
 <script>
-  // ── Auth guard ──────────────────────────────────────────────────────────────
-  const token    = localStorage.getItem('jwt');
-  const username = localStorage.getItem('username') || 'User';
-  const role     = localStorage.getItem('role')     || 'user';
-
-  if (!token) window.location.href = '/login.html';
-
-  // Proactive expiry check: decode JWT exp claim and redirect if already expired.
-  function isTokenExpired(tok) {
-    try {
-      const payload = JSON.parse(atob(tok.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
-      return payload.exp && payload.exp < Math.floor(Date.now() / 1000);
-    } catch { return true; }
-  }
-  if (isTokenExpired(token)) {
-    localStorage.clear();
-    window.location.href = '/login.html';
+  function loginRedirectUrl() {
+    const next = window.location.pathname + window.location.search;
+    return `/ztam/login?next=${encodeURIComponent(next)}`;
   }
 
-  // Central function – clears session and redirects to login on auth failure.
+  // Central function – redirects to the platform login on auth failure.
   function handleAuthFailure(status) {
     if (status === 401 || status === 403) {
-      localStorage.clear();
-      window.location.href = '/login.html';
+      window.location.href = loginRedirectUrl();
       return true;
     }
     return false;
   }
 
-  document.getElementById('navUser').textContent = username;
-  document.getElementById('navRole').textContent = role;
+  async function loadSession() {
+    const res = await fetch('/api/auth/session', { credentials: 'same-origin' });
+    if (handleAuthFailure(res.status)) {
+      return null;
+    }
+    if (!res.ok) {
+      throw new Error('Failed to load session');
+    }
+    const session = await res.json();
+    document.getElementById('navUser').textContent = session.username || 'User';
+    document.getElementById('navRole').textContent = session.role || 'user';
+    return session;
+  }
 
   // ── Logout ──────────────────────────────────────────────────────────────────
-  document.getElementById('logoutBtn').addEventListener('click', () => {
-    localStorage.removeItem('jwt');
-    localStorage.removeItem('username');
-    localStorage.removeItem('role');
-    window.location.href = '/login.html';
+  document.getElementById('logoutBtn').addEventListener('click', async () => {
+    try {
+      await fetch('/api/auth/logout', {
+        method: 'POST',
+        credentials: 'same-origin',
+      });
+    } catch (err) {
+      // Best-effort logout; always send the browser back through the platform login.
+    }
+    window.location.href = '/ztam/login?next=%2Fdashboard.html';
   });
 
   // ── Helpers ─────────────────────────────────────────────────────────────────
   function authHeaders() {
     return {
       'Content-Type':  'application/json',
-      'Authorization': `Bearer ${token}`,
     };
   }
 
@@ -388,7 +388,19 @@
   }
 
   // ── Init ─────────────────────────────────────────────────────────────────────
-  loadTasks();
+  async function init() {
+    try {
+      const session = await loadSession();
+      if (!session) {
+        return;
+      }
+      await loadTasks();
+    } catch (err) {
+      document.getElementById('loadMsg').textContent = 'Failed to load session. Refresh and try again.';
+    }
+  }
+
+  init();
 </script>
 </body>
 </html>

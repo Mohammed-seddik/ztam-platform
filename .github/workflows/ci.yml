@@ -19,6 +19,42 @@ jobs:
             openpolicyagent/opa:0.64.1 \
             test /policies -v
 
+  repo-validation:
+    name: Repo Validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Validate tenant configs
+        run: python3 scripts/tenant_manager.py validate
+      - name: Validate generated policy output
+        run: python3 scripts/tenant_manager.py sync-policies --output /tmp/tenants.json
+      - name: Validate generated Envoy output
+        run: |
+          cp envoy/envoy.yaml /tmp/envoy.yaml
+          python3 scripts/tenant_manager.py sync-envoy --envoy-yaml /tmp/envoy.yaml
+      - name: Check Python syntax
+        run: |
+          python3 -m py_compile \
+            services/auth-middleware/main.py \
+            scripts/tenant_manager.py \
+            scripts/smoke_test_tenant.py \
+            scripts/validate_deployment.py \
+            demo/setup_demo.py \
+            setup_demo.py
+      - name: Check shell syntax
+        run: |
+          bash -n \
+            scripts/onboard-tenant.sh \
+            scripts/offboard-tenant.sh \
+            demo/demo_test.sh \
+            demo_test.sh \
+            envoy/generate-certs.sh
+      - name: Validate Compose config
+        run: docker compose config -q
+
   docker-build:
     name: Docker Build Check
     runs-on: ubuntu-latest
@@ -27,4 +63,4 @@ jobs:
       - name: Build auth-middleware image
         run: docker build ./services/auth-middleware
       - name: Build testapp image
-        run: docker build ./testapp
+        run: docker build ./demo/testapp

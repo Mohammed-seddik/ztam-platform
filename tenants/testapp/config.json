@@ -2,13 +2,60 @@
   "name": "testapp",
   "display_name": "TestApp (Demo Tenant)",
   "backend_url": "http://testapp:3000",
-  "backend_host": "testapp",
-  "backend_port": 3000,
-  "backend_tls": false,
   "hostname": "localhost",
   "keycloak_client_id": "test-app",
   "keycloak_realm": "test-tenant",
-  "roles": "admin,editor,user,viewer",
+  "roles": [
+    "admin",
+    "editor",
+    "user",
+    "viewer"
+  ],
+  "login_mode": "form",
+  "no_spi": false,
+  "permissions": {
+    "editor": {
+      "allowed_paths": [
+        "/api/"
+      ],
+      "denied_paths": [
+        "/admin/",
+        "/admin"
+      ],
+      "allowed_methods": [
+        "GET",
+        "POST",
+        "PUT",
+        "PATCH",
+        "DELETE"
+      ]
+    },
+    "user": {
+      "allowed_paths": [
+        "/api/"
+      ],
+      "denied_paths": [
+        "/admin/",
+        "/admin"
+      ],
+      "allowed_methods": [
+        "GET",
+        "POST"
+      ]
+    },
+    "viewer": {
+      "allowed_paths": [
+        "/api/"
+      ],
+      "denied_paths": [
+        "/admin/",
+        "/admin"
+      ],
+      "allowed_methods": [
+        "GET"
+      ]
+    }
+  },
   "created_at": "2026-03-06T00:00:00Z",
   "notes": "The built-in demo tenant. Backend runs inside Docker on the ztam network."
 }

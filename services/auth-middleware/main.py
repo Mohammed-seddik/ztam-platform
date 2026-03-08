@@ -10,16 +10,138 @@ import os
 import threading
 import time
 import logging
+import uuid
+from pathlib import Path
 from typing import Optional
+from urllib.parse import urlencode
 
 import httpx
 from fastapi import FastAPI, Request, Response
 from jose import JWTError, jwt
 
-logging.basicConfig(level=logging.INFO)
+LOG_FORMAT = os.getenv("LOG_FORMAT", "json").strip().lower() or "json"
+ZTAM_ENVIRONMENT = os.getenv("ZTAM_ENVIRONMENT", os.getenv("ENVIRONMENT", "dev"))
+
+_LOG_RESERVED_FIELDS = {
+    "args",
+    "asctime",
+    "created",
+    "exc_info",
+    "exc_text",
+    "filename",
+    "funcName",
+    "levelname",
+    "levelno",
+    "lineno",
+    "module",
+    "msecs",
+    "message",
+    "msg",
+    "name",
+    "pathname",
+    "process",
+    "processName",
+    "relativeCreated",
+    "stack_info",
+    "thread",
+    "threadName",
+}
+
+
+class JsonFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:
+        payload = {
+            "timestamp": self.formatTime(record, "%Y-%m-%dT%H:%M:%S"),
+            "level": record.levelname,
+            "service": "auth-middleware",
+            "environment": ZTAM_ENVIRONMENT,
+            "message": record.getMessage(),
+        }
+        for key, value in record.__dict__.items():
+            if key in _LOG_RESERVED_FIELDS or key.startswith("_"):
+                continue
+            payload[key] = value
+        if record.exc_info:
+            payload["exception"] = self.formatException(record.exc_info)
+        return json.dumps(payload, default=str)
+
+
+_log_handler = logging.StreamHandler()
+if LOG_FORMAT == "json":
+    _log_handler.setFormatter(JsonFormatter())
+else:
+    _log_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+
+logging.basicConfig(level=logging.INFO, handlers=[_log_handler], force=True)
 logger = logging.getLogger("auth-middleware")
 
 app = FastAPI(title="ZTAM Auth Middleware")
+
+
+def _request_id(request: Optional[Request]) -> str:
+    if request is None:
+        return ""
+    return getattr(request.state, "request_id", "")
+
+
+def _log_event(level: int, event: str, request: Optional[Request] = None, **fields) -> None:
+    extra = {
+        "event": event,
+        "request_id": _request_id(request),
+        **fields,
+    }
+    if request is not None:
+        extra.setdefault("path", request.url.path)
+        extra.setdefault("method", request.method)
+        extra.setdefault("host", request.headers.get("host", ""))
+    logger.log(level, event, extra=extra)
+
+
+@app.middleware("http")
+async def attach_request_context(request: Request, call_next):
+    request_id = (
+        request.headers.get("x-request-id")
+        or request.headers.get("x-correlation-id")
+        or str(uuid.uuid4())
+    )
+    request.state.request_id = request_id
+    started_at = time.perf_counter()
+
+    try:
+        response = await call_next(request)
+    except Exception:
+        _log_event(
+            logging.ERROR,
+            "request_unhandled_exception",
+            request=request,
+            latency_ms=round((time.perf_counter() - started_at) * 1000, 2),
+        )
+        raise
+
+    response.headers["x-request-id"] = request_id
+    latency_seconds = time.perf_counter() - started_at
+    endpoint = _endpoint_label(request)
+    _metric_inc(
+        "ztam_auth_http_requests_total",
+        endpoint=endpoint,
+        method=request.method,
+        status_code=response.status_code,
+    )
+    _metric_observe_latency(
+        "ztam_auth_http_request_duration_seconds",
+        latency_seconds,
+        endpoint=endpoint,
+        method=request.method,
+    )
+    if request.url.path != "/health":
+        _log_event(
+            logging.INFO,
+            "request_completed",
+            request=request,
+            status_code=response.status_code,
+            latency_ms=round(latency_seconds * 1000, 2),
+        )
+    return response
 
 # ─── Config from environment ─────────────────────────────────────────────────
 KEYCLOAK_URL: str = os.getenv("KEYCLOAK_URL", "http://keycloak:8080")
@@ -44,6 +166,7 @@ EXPECTED_ISSUER: str = f"{KC_ISSUER_URL}/realms/{KC_REALM}"
 AUTH_COOKIE_NAME = "ztam_auth"
 AUTH_COOKIE_SECURE = os.getenv("AUTH_COOKIE_SECURE", "true").lower() == "true"
 AUTH_COOKIE_SAMESITE = os.getenv("AUTH_COOKIE_SAMESITE", "lax")
+TENANTS_DIR = Path(os.getenv("TENANTS_DIR", "/app/tenants"))
 
 # ─── JWKS in-memory cache with asyncio lock (prevents thundering herd) ───────
 _jwks_cache: dict = {}
@@ -63,6 +186,86 @@ _rl_lock = threading.Lock()
 _rl_state: dict = {}           # ip → {"count": int, "reset_at": float}
 _LOGIN_RATE_LIMIT = 10         # max attempts per window
 _LOGIN_RATE_WINDOW = 60.0      # seconds
+
+_tenant_cache_lock = threading.Lock()
+_tenant_cache_by_name: dict[str, dict] = {}
+_tenant_cache_by_host: dict[str, dict] = {}
+_tenant_cache_fetched_at: float = 0.0
+TENANT_CACHE_TTL = 5.0
+
+_metrics_lock = threading.Lock()
+_metrics_counters: collections.Counter = collections.Counter()
+_METRIC_LATENCY_BUCKETS = (0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0)
+
+
+def _metric_label(value: object) -> str:
+    raw = str(value if value not in (None, "") else "unknown")
+    return raw.replace("\\", "\\\\").replace('"', '\\"').replace("\n", " ")
+
+
+def _metric_key(name: str, labels: dict[str, object]) -> tuple[str, tuple[tuple[str, str], ...]]:
+    return name, tuple(sorted((key, _metric_label(value)) for key, value in labels.items()))
+
+
+def _metric_inc(name: str, value: float = 1.0, **labels) -> None:
+    with _metrics_lock:
+        _metrics_counters[_metric_key(name, labels)] += value
+
+
+def _metric_observe_latency(name: str, seconds: float, **labels) -> None:
+    with _metrics_lock:
+        _metrics_counters[_metric_key(f"{name}_count", labels)] += 1
+        _metrics_counters[_metric_key(f"{name}_sum", labels)] += seconds
+        for bucket in _METRIC_LATENCY_BUCKETS:
+            if seconds <= bucket:
+                _metrics_counters[_metric_key(f"{name}_bucket", {**labels, "le": bucket})] += 1
+        _metrics_counters[_metric_key(f"{name}_bucket", {**labels, "le": "+Inf"})] += 1
+
+
+def _format_metric_line(name: str, value: float, labels: tuple[tuple[str, str], ...]) -> str:
+    if labels:
+        rendered = ",".join(f'{key}="{label}"' for key, label in labels)
+        return f"{name}{{{rendered}}} {value}"
+    return f"{name} {value}"
+
+
+def _render_metrics() -> str:
+    lines = [
+        "# HELP ztam_auth_http_requests_total Total HTTP requests handled by auth-middleware.",
+        "# TYPE ztam_auth_http_requests_total counter",
+        "# HELP ztam_auth_http_request_duration_seconds Request duration seen by auth-middleware.",
+        "# TYPE ztam_auth_http_request_duration_seconds histogram",
+        "# HELP ztam_auth_login_attempts_total Login attempts by flow and outcome.",
+        "# TYPE ztam_auth_login_attempts_total counter",
+        "# HELP ztam_auth_decisions_total Authorization decisions by outcome and tenant.",
+        "# TYPE ztam_auth_decisions_total counter",
+        "# HELP ztam_auth_failures_total Authentication and policy-engine failures.",
+        "# TYPE ztam_auth_failures_total counter",
+    ]
+    with _metrics_lock:
+        items = sorted(_metrics_counters.items(), key=lambda item: (item[0][0], item[0][1]))
+    for (name, labels), value in items:
+        lines.append(_format_metric_line(name, value, labels))
+    return "\n".join(lines) + "\n"
+
+
+def _endpoint_label(request: Request) -> str:
+    path = request.url.path
+    if path == "/health":
+        return "health"
+    if path == "/metrics":
+        return "metrics"
+    if path == "/ztam/login":
+        return "platform_login"
+    if path == "/login-proxy":
+        return "login_proxy"
+    if path == "/logout":
+        return "logout"
+    if path in {"/ztam/login-redirect", "/login-redirect"}:
+        return "login_redirect"
+    if path in {"/ztam/auth/callback", "/api/auth/callback", "/auth/callback"}:
+        return "auth_callback"
+    return "ext_authz"
 
 
 def _check_rate_limit(client_ip: str) -> bool:
@@ -86,7 +289,73 @@ def _cleanup_rate_limiter() -> None:
         expired = [ip for ip, s in _rl_state.items() if now >= s["reset_at"]]
         for ip in expired:
             del _rl_state[ip]
-    logger.debug("[rate-limiter] cleanup: removed %d expired entries", len(expired))
+    _log_event(logging.DEBUG, "rate_limiter_cleanup", removed_entries=len(expired))
+
+
+def _load_tenant_cache() -> tuple[dict[str, dict], dict[str, dict]]:
+    global _tenant_cache_by_name, _tenant_cache_by_host, _tenant_cache_fetched_at
+
+    now = time.time()
+    if _tenant_cache_by_name and (now - _tenant_cache_fetched_at) < TENANT_CACHE_TTL:
+        return _tenant_cache_by_name, _tenant_cache_by_host
+
+    with _tenant_cache_lock:
+        now = time.time()
+        if _tenant_cache_by_name and (now - _tenant_cache_fetched_at) < TENANT_CACHE_TTL:
+            return _tenant_cache_by_name, _tenant_cache_by_host
+
+        by_name: dict[str, dict] = {}
+        by_host: dict[str, dict] = {}
+
+        if TENANTS_DIR.exists():
+            for config_path in sorted(TENANTS_DIR.glob("*/config.json")):
+                if config_path.parent.name == "_template":
+                    continue
+                try:
+                    raw_config = json.loads(config_path.read_text(encoding="utf-8"))
+                except Exception as exc:
+                    _log_event(logging.WARNING, "tenant_config_unreadable", config_path=str(config_path), error=str(exc))
+                    continue
+
+                tenant_name = str(raw_config.get("name", "")).strip()
+                hostname = str(raw_config.get("hostname", "")).strip().split(":")[0]
+                if not tenant_name or not hostname:
+                    continue
+
+                tenant_config = {
+                    "name": tenant_name,
+                    "hostname": hostname,
+                    "login_mode": str(raw_config.get("login_mode", "form")).strip() or "form",
+                    "keycloak_client_id": str(raw_config.get("keycloak_client_id", tenant_name)).strip() or tenant_name,
+                    "keycloak_client_secret": str(raw_config.get("keycloak_client_secret", "")).strip(),
+                    "keycloak_realm": str(raw_config.get("keycloak_realm", KC_REALM)).strip() or KC_REALM,
+                }
+                by_name[tenant_name] = tenant_config
+                by_host[hostname.lower()] = tenant_config
+
+        _tenant_cache_by_name = by_name
+        _tenant_cache_by_host = by_host
+        _tenant_cache_fetched_at = now
+        return _tenant_cache_by_name, _tenant_cache_by_host
+
+
+def get_tenant_config(host_header: str = "", tenant_name: str = "") -> dict | None:
+    tenants_by_name, tenants_by_host = _load_tenant_cache()
+    host_clean = host_header.split(":")[0].strip().lower()
+    if host_clean and host_clean in tenants_by_host:
+        return tenants_by_host[host_clean]
+    if tenant_name:
+        return tenants_by_name.get(tenant_name)
+    return None
+
+
+def build_callback_url(request: Request, tenant_name: str = "") -> str:
+    host_header = request.headers.get("host", "").split(":")[0].strip()
+    scheme = request.headers.get("x-forwarded-proto") or request.url.scheme or "https"
+    base_url = f"{scheme}://{host_header}" if host_header else ZTAM_PUBLIC_URL.rstrip("/")
+    if tenant_name:
+        return f"{base_url}/ztam/auth/callback?tenant={tenant_name}"
+    return f"{base_url}/ztam/auth/callback"
 
 
 @app.on_event("startup")
@@ -120,7 +389,7 @@ async def get_jwks() -> dict:
         if _jwks_cache and (now - _jwks_fetched_at) < JWKS_TTL:
             return _jwks_cache
 
-        logger.info("Fetching JWKS from %s", JWKS_URI)
+        _log_event(logging.INFO, "jwks_fetch_started", jwks_uri=JWKS_URI)
         async with httpx.AsyncClient(timeout=5.0) as client:
             resp = await client.get(JWKS_URI)
             resp.raise_for_status()
@@ -284,6 +553,15 @@ async def health():
     return {"status": "ok"}
 
 
+@app.get("/metrics")
+async def metrics() -> Response:
+    return Response(
+        content=_render_metrics(),
+        media_type="text/plain",
+        headers={"Content-Type": "text/plain; version=0.0.4; charset=utf-8"},
+    )
+
+
 @app.get("/ztam/login")
 async def ztam_login_page(next: str = "/") -> Response:
     """Serve the ZTAM platform login page. Linked to by auth redirects."""
@@ -320,7 +598,8 @@ async def ztam_login_post(request: Request) -> Response:
 
     client_ip: str = request.client.host if request.client else "unknown"
     if not _check_rate_limit(client_ip):
-        logger.warning("[ztam-login] Rate limit hit for IP %s", client_ip)
+        _metric_inc("ztam_auth_login_attempts_total", flow="platform", outcome="rate_limited")
+        _log_event(logging.WARNING, "platform_login_rate_limited", request=request, client_ip=client_ip)
         return Response(content='{"error":"Too many login attempts, please try again later"}',
                         status_code=429, media_type="application/json")
 
@@ -337,12 +616,14 @@ async def ztam_login_post(request: Request) -> Response:
                 },
             )
     except Exception as exc:
-        logger.error("[ztam-login] Keycloak unreachable: %s", exc)
+        _metric_inc("ztam_auth_failures_total", type="keycloak_unreachable", flow="platform")
+        _log_event(logging.ERROR, "platform_login_keycloak_unreachable", request=request, client_ip=client_ip, error=str(exc))
         return Response(content='{"error":"Auth service unavailable"}',
                         status_code=503, media_type="application/json")
 
     if kc_resp.status_code != 200:
-        logger.warning("[ztam-login] Failed login for user=%s", username)
+        _metric_inc("ztam_auth_login_attempts_total", flow="platform", outcome="failed")
+        _log_event(logging.WARNING, "platform_login_failed", request=request, username=username, client_ip=client_ip, status_code=kc_resp.status_code)
         return Response(content='{"error":"Invalid credentials"}',
                         status_code=401, media_type="application/json")
 
@@ -353,13 +634,15 @@ async def ztam_login_post(request: Request) -> Response:
     try:
         claims = jwt.get_unverified_claims(kc_token)
     except JWTError as exc:
-        logger.error("[ztam-login] Could not decode token: %s", exc)
+        _metric_inc("ztam_auth_failures_total", type="platform_token_decode_failed", flow="platform")
+        _log_event(logging.ERROR, "platform_login_token_decode_failed", request=request, username=username, error=str(exc))
         return Response(content='{"error":"Auth service error"}',
                         status_code=500, media_type="application/json")
 
     role: str = claims.get("role") or "viewer"
     uname: str = claims.get("preferred_username", username)
-    logger.info("[ztam-login] Authenticated user=%s role=%s", uname, role)
+    _metric_inc("ztam_auth_login_attempts_total", flow="platform", outcome="succeeded")
+    _log_event(logging.INFO, "platform_login_succeeded", request=request, username=uname, role=role)
 
     resp = Response(
         content=json.dumps({"redirect": next_url, "username": uname, "role": role}),
@@ -412,7 +695,8 @@ async def login_proxy(request: Request):
     # ── Per-IP rate limit: max 10 login attempts per 60 s ────────────────────
     client_ip: str = (request.client.host if request.client else "unknown")
     if not _check_rate_limit(client_ip):
-        logger.warning("Login rate limit hit for IP %s", client_ip)
+        _metric_inc("ztam_auth_login_attempts_total", flow="proxy", outcome="rate_limited")
+        _log_event(logging.WARNING, "login_proxy_rate_limited", request=request, client_ip=client_ip)
         return Response(
             content='{"error":"too many login attempts, please try again later."}',
             status_code=429, media_type="application/json"
@@ -432,12 +716,14 @@ async def login_proxy(request: Request):
                 },
             )
     except Exception as exc:
-        logger.error("Keycloak unreachable: %s", exc)
+        _metric_inc("ztam_auth_failures_total", type="keycloak_unreachable", flow="proxy")
+        _log_event(logging.ERROR, "login_proxy_keycloak_unreachable", request=request, client_ip=client_ip, error=str(exc))
         return Response(content='{"error":"auth service unavailable"}',
                         status_code=503, media_type="application/json")
 
     if kc_resp.status_code != 200:
-        logger.warning("Keycloak rejected login for %s: HTTP %s", username, kc_resp.status_code)
+        _metric_inc("ztam_auth_login_attempts_total", flow="proxy", outcome="failed")
+        _log_event(logging.WARNING, "login_proxy_failed", request=request, username=username, client_ip=client_ip, status_code=kc_resp.status_code)
         return Response(content='{"error":"Invalid credentials."}',
                         status_code=401, media_type="application/json")
 
@@ -448,14 +734,16 @@ async def login_proxy(request: Request):
     try:
         claims = jwt.get_unverified_claims(kc_token)
     except JWTError as exc:
-        logger.error("Failed to decode Keycloak token: %s", exc)
+        _metric_inc("ztam_auth_failures_total", type="proxy_token_decode_failed", flow="proxy")
+        _log_event(logging.ERROR, "login_proxy_token_decode_failed", request=request, username=username, error=str(exc))
         return Response(content='{"error":"malformed token from IdP"}',
                         status_code=500, media_type="application/json")
 
     role: str = claims.get("role") or "viewer"
     uname: str = claims.get("preferred_username", username)
 
-    logger.info("[login-proxy] Keycloak authenticated %s (role=%s)", uname, role)
+    _metric_inc("ztam_auth_login_attempts_total", flow="proxy", outcome="succeeded")
+    _log_event(logging.INFO, "login_proxy_succeeded", request=request, username=uname, role=role)
 
     # ── 3. Return RS256 Keycloak token to the browser ─────────────────────────
     # The browser stores this and sends it on every subsequent API request.
@@ -476,10 +764,18 @@ async def logout(request: Request) -> Response:
     Called by Envoy for POST /api/auth/logout.
     """
     auth_header: str = request.headers.get("authorization", "")
-    if not auth_header.lower().startswith("bearer "):
-        return Response(content='{"error":"missing token"}', status_code=401,
+    token: Optional[str] = None
+    if auth_header.lower().startswith("bearer "):
+        token = auth_header[7:]
+    else:
+        token = request.cookies.get(AUTH_COOKIE_NAME)
+
+    response = Response(content='{"message":"logged out"}', status_code=200,
                         media_type="application/json")
-    token = auth_header[7:]
+    response.delete_cookie(key=AUTH_COOKIE_NAME, path="/")
+    if not token:
+        _log_event(logging.INFO, "logout_without_token", request=request)
+        return response
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             await client.post(
@@ -491,52 +787,69 @@ async def logout(request: Request) -> Response:
                     "token":          token,
                 },
             )
-        logger.info("[logout] Keycloak session revoked")
+        _log_event(logging.INFO, "logout_succeeded", request=request)
     except Exception as exc:
-        logger.warning("[logout] Keycloak unreachable: %s", exc)
-    return Response(content='{"message":"logged out"}', status_code=200,
-                    media_type="application/json")
+        _log_event(logging.WARNING, "logout_keycloak_unreachable", request=request, error=str(exc))
+    return response
 
 
+@app.get("/ztam/login-redirect")
 @app.get("/login-redirect")
-async def login_redirect(tenant: str, redirect_uri: str = "/") -> Response:
+async def login_redirect(request: Request, tenant: str, next: str = "/") -> Response:
     """
     Redirects the browser to Keycloak's login page for a specific tenant.
     Called by Envoy when a user hits a 'keycloak' login-mode tenant without a token.
     """
-    # Use the tenant name as the client_id
+    tenant_config = get_tenant_config(tenant_name=tenant) or {}
+    client_id = tenant_config.get("keycloak_client_id", tenant)
+    realm = tenant_config.get("keycloak_realm", KC_REALM)
+    callback_url = build_callback_url(request, tenant)
     scoped_auth_uri = (
-        f"{KC_ISSUER_URL}/realms/{KC_REALM}/protocol/openid-connect/auth"
-        f"?client_id={tenant}"
-        f"&response_type=code"
-        f"&scope=openid profile email"
-        f"&redirect_uri={ZTAM_PUBLIC_URL}/api/auth/callback"
-        f"&state={redirect_uri}"
+        f"{KC_ISSUER_URL}/realms/{realm}/protocol/openid-connect/auth?"
+        + urlencode(
+            {
+                "client_id": client_id,
+                "response_type": "code",
+                "scope": "openid profile email",
+                "redirect_uri": callback_url,
+                "state": next,
+            }
+        )
     )
     return Response(status_code=302, headers={"Location": scoped_auth_uri})
 
 
+@app.get("/ztam/auth/callback")
+@app.get("/api/auth/callback")
 @app.get("/auth/callback")
-async def auth_callback(code: str, state: str = "/", tenant: str = None) -> Response:
+async def auth_callback(request: Request, code: str, state: str = "/", tenant: str = "") -> Response:
     """
     OAuth2 callback: exchanges authorization code for a token,
     sets a secure cookie, and redirects back to the original app page.
     """
-    # Note: If tenant is not passed in query, we can try to extract it from state or config.
-    # For now, we'll assume the client_id is the default unless specified.
-    client_id = tenant if tenant else KC_CLIENT_ID
+    tenant_config = get_tenant_config(request.headers.get("host", ""), tenant) or {}
+    client_id = tenant_config.get("keycloak_client_id") or tenant or KC_CLIENT_ID
+    client_secret = tenant_config.get("keycloak_client_secret") or ""
+    realm = tenant_config.get("keycloak_realm", KC_REALM)
+    token_uri = f"{KEYCLOAK_URL}/realms/{realm}/protocol/openid-connect/token"
+    callback_url = build_callback_url(request, tenant_config.get("name", tenant))
 
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
+            token_request = {
+                "grant_type": "authorization_code",
+                "client_id": client_id,
+                "code": code,
+                "redirect_uri": callback_url,
+            }
+            if client_secret:
+                token_request["client_secret"] = client_secret
+            elif client_id == KC_CLIENT_ID:
+                token_request["client_secret"] = KC_CLIENT_SECRET
+
             resp = await client.post(
-                KC_TOKEN_URI,
-                data={
-                    "grant_type":    "authorization_code",
-                    "client_id":     client_id,
-                    "client_secret": KC_CLIENT_SECRET,
-                    "code":          code,
-                    "redirect_uri":  f"{ZTAM_PUBLIC_URL}/api/auth/callback",
-                },
+                token_uri,
+                data=token_request,
             )
             resp.raise_for_status()
             data = resp.json()
@@ -554,9 +867,25 @@ async def auth_callback(code: str, state: str = "/", tenant: str = None) -> Resp
                 samesite=AUTH_COOKIE_SAMESITE,
                 max_age=data.get("expires_in", 3600),
             )
+            _metric_inc("ztam_auth_login_attempts_total", flow="callback", outcome="succeeded")
+            _log_event(
+                logging.INFO,
+                "auth_callback_succeeded",
+                request=request,
+                tenant_id=tenant_config.get("name", tenant),
+                client_id=client_id,
+            )
             return response
     except Exception as exc:
-        logger.error("[callback] Token exchange failed: %s", exc)
+        _log_event(
+            logging.ERROR,
+            "auth_callback_failed",
+            request=request,
+            tenant_id=tenant_config.get("name", tenant),
+            client_id=client_id,
+            error=str(exc),
+        )
+        _metric_inc("ztam_auth_failures_total", type="callback_failed", tenant_id=tenant_config.get("name", tenant) or "unknown")
         return Response(content='{"error":"authentication failed"}',
                         status_code=500, media_type="application/json")
 
@@ -581,6 +910,15 @@ async def check(request: Request, full_path: str = ""):
     if request.url.query:
         original_path += "?" + request.url.query
 
+    if original_path == "/health":
+        return Response(content='{"status":"ok"}', media_type="application/json")
+    if original_path == "/metrics":
+        return Response(
+            content=_render_metrics(),
+            media_type="text/plain",
+            headers={"Content-Type": "text/plain; version=0.0.4; charset=utf-8"},
+        )
+
     # ---------- 2. Extract Bearer token (Header or Cookie) ------------------
     auth_header: str = request.headers.get("authorization", "")
     token: Optional[str] = None
@@ -591,15 +929,24 @@ async def check(request: Request, full_path: str = ""):
         # Fallback to cookie — primary method for browser-based tenants
         token = request.cookies.get(AUTH_COOKIE_NAME)
 
+    host_header: str = request.headers.get("host", "")
+    host_clean: str = host_header.split(":")[0]
+    tenant_config = get_tenant_config(host_header)
+
     if not token:
         # Browser clients get redirected to the ZTAM login page.
         # API clients (no 'text/html' in Accept) get a 401 JSON response.
         accept: str = request.headers.get("accept", "")
         if "text/html" in accept:
-            login_url = f"/ztam/login?next={original_path}"
-            logger.info("[check] No token — redirecting browser to %s", login_url)
+            if tenant_config and tenant_config.get("login_mode") == "keycloak":
+                login_url = f"/ztam/login-redirect?{urlencode({'tenant': tenant_config['name'], 'next': original_path})}"
+            else:
+                login_url = f"/ztam/login?{urlencode({'next': original_path})}"
+            _metric_inc("ztam_auth_decisions_total", outcome="redirect_to_login", tenant_id=(tenant_config or {}).get("name", "unknown"))
+            _log_event(logging.INFO, "auth_redirected_to_login", request=request, tenant_id=(tenant_config or {}).get("name", ""), redirect_to=login_url, path=original_path)
             return Response(status_code=302, headers={"location": login_url})
-        logger.warning("[check] Missing token (API request) for %s", original_path)
+        _metric_inc("ztam_auth_decisions_total", outcome="missing_token", tenant_id=(tenant_config or {}).get("name", "unknown"))
+        _log_event(logging.WARNING, "auth_missing_token", request=request, tenant_id=(tenant_config or {}).get("name", ""), path=original_path)
         return Response(
             content='{"error":"missing token"}',
             status_code=401,
@@ -610,7 +957,8 @@ async def check(request: Request, full_path: str = ""):
     try:
         jwks = await get_jwks()
     except Exception as exc:
-        logger.error("Failed to fetch JWKS: %s", exc)
+        _metric_inc("ztam_auth_failures_total", type="jwks_fetch_failed")
+        _log_event(logging.ERROR, "jwks_fetch_failed", request=request, error=str(exc), path=original_path)
         return Response(
             content='{"error":"auth service unavailable"}',
             status_code=503,
@@ -629,7 +977,8 @@ async def check(request: Request, full_path: str = ""):
             issuer=EXPECTED_ISSUER,
         )
     except JWTError as exc:
-        logger.warning("JWT validation failed: %s", exc)
+        _metric_inc("ztam_auth_failures_total", type="jwt_validation_failed")
+        _log_event(logging.WARNING, "jwt_validation_failed", request=request, error=str(exc), path=original_path)
         return Response(
             content='{"error":"invalid or expired token"}',
             status_code=403,
@@ -642,7 +991,8 @@ async def check(request: Request, full_path: str = ""):
     # would break multi-tenant flows where each tenant has its own client_id.
     azp = claims.get("azp", "")
     if not azp:
-        logger.warning("JWT rejected: azp claim missing")
+        _metric_inc("ztam_auth_failures_total", type="jwt_missing_azp")
+        _log_event(logging.WARNING, "jwt_rejected_missing_azp", request=request, path=original_path)
         return Response(
             content='{"error":"invalid token: no authorized party"}',
             status_code=403,
@@ -656,9 +1006,11 @@ async def check(request: Request, full_path: str = ""):
     # Derive tenant from the original virtual host (e.g. "store.ztam.local" → "store").
     # This lets OPA look up the correct per-tenant policies regardless of which
     # Keycloak client was used for authentication.
-    host_header: str = request.headers.get("host", "")
-    host_clean: str  = host_header.split(":")[0]          # strip port
-    tenant_from_host: str = host_clean.split(".")[0] if "." in host_clean else ""
+    tenant_from_host: str = (
+        tenant_config["name"]
+        if tenant_config
+        else (host_clean.split(".")[0] if "." in host_clean else "")
+    )
     tenant_id: str = (
         tenant_from_host
         or claims.get("tenant_id")
@@ -705,7 +1057,8 @@ async def check(request: Request, full_path: str = ""):
             opa_resp.raise_for_status()
             opa_result: dict = opa_resp.json().get("result", {})
     except Exception as exc:
-        logger.error("OPA call failed: %s", exc)
+        _metric_inc("ztam_auth_failures_total", type="opa_call_failed", tenant_id=tenant_id)
+        _log_event(logging.ERROR, "opa_call_failed", request=request, tenant_id=tenant_id, path=original_path, error=str(exc))
         return Response(
             content='{"error":"policy engine unavailable"}',
             status_code=503,
@@ -737,10 +1090,17 @@ async def check(request: Request, full_path: str = ""):
                 algorithm="HS256",
             )
             extra_headers["authorization"] = f"Bearer {downstream_token}"
-            logger.info(
-                "Access allowed — user=%s role=%s path=%s → HS256 token issued",
-                username, primary_role, original_path,
+            _log_event(
+                logging.INFO,
+                "access_allowed_token_translated",
+                request=request,
+                tenant_id=tenant_id,
+                user_id=user_id,
+                username=username,
+                role=primary_role,
+                path=original_path,
             )
+            _metric_inc("ztam_auth_decisions_total", outcome="allowed", tenant_id=tenant_id)
 
         # Build downstream roles list.
         # Prefer the SPI-assigned custom_role (authoritative application role).
@@ -756,15 +1116,23 @@ async def check(request: Request, full_path: str = ""):
                 "x-username":   username,
                 "x-user-roles": ",".join(clean_roles),
                 "x-tenant-id":  tenant_id,
+                "x-request-id": _request_id(request),
                 **extra_headers,
             },
         )
 
     # ---------- 10. Deny ----------------------------------------------------
-    logger.info(
-        "Access denied — user=%s roles=%s path=%s reason=%s",
-        user_id, roles, original_path, deny_reason,
+    _log_event(
+        logging.INFO,
+        "access_denied",
+        request=request,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        roles=roles,
+        path=original_path,
+        reason=deny_reason,
     )
+    _metric_inc("ztam_auth_decisions_total", outcome="denied", tenant_id=tenant_id)
     # Return a user-friendly HTML page for browser requests
     accept: str = request.headers.get("accept", "")
     if "text/html" in accept:

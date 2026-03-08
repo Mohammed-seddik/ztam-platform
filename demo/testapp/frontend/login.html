@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Login – TaskApp</title>
+  <title>Sign In Redirect – TaskApp</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -50,62 +50,22 @@
 </head>
 <body>
 <div class="card">
-  <h1>Welcome back</h1>
-  <p class="sub">Sign in to your TaskApp account</p>
+  <h1>Sign in through ZTAM</h1>
+  <p class="sub">This application now uses the platform-owned Zero Trust login.</p>
 
-  <form id="loginForm">
-    <label for="username">Username</label>
-    <input id="username" type="text" placeholder="Enter username" required autocomplete="username"/>
+  <button id="continueBtn" type="button">Continue to Secure Sign In</button>
 
-    <label for="password">Password</label>
-    <input id="password" type="password" placeholder="Enter password" required autocomplete="current-password"/>
-
-    <button type="submit">Sign In</button>
-  </form>
-
-  <div id="msg" class="msg"></div>
-
-  <div class="link-row">
-    Don't have an account? <a href="/register.html">Register</a>
-  </div>
+  <div id="msg" class="msg">Redirecting…</div>
 </div>
 
 <script>
-  // Redirect if already logged in
-  if (localStorage.getItem('jwt')) window.location.href = '/dashboard.html';
+  const secureLoginUrl = `/ztam/login?next=${encodeURIComponent('/dashboard.html')}`;
 
-  document.getElementById('loginForm').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const msg = document.getElementById('msg');
-    msg.textContent = '';
-    msg.className   = 'msg';
-
-    const username = document.getElementById('username').value.trim();
-    const password = document.getElementById('password').value;
-
-    try {
-      const res  = await fetch('/api/auth/login', {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ username, password }),
-      });
-      const data = await res.json();
-
-      if (!res.ok) {
-        msg.textContent = data.error || 'Login failed.';
-        msg.className   = 'msg err';
-        return;
-      }
-
-      localStorage.setItem('jwt',      data.token);
-      localStorage.setItem('username', data.username);
-      localStorage.setItem('role',     data.role);
-      window.location.href = '/dashboard.html';
-    } catch (err) {
-      msg.textContent = 'Network error. Is the server running?';
-      msg.className   = 'msg err';
-    }
+  document.getElementById('continueBtn').addEventListener('click', () => {
+    window.location.href = secureLoginUrl;
   });
+
+  window.location.replace(secureLoginUrl);
 </script>
 </body>
 </html>

@@ -76,35 +76,20 @@ fi
 
 # ── Step 3: Remove OPA permissions ────────────────────────────────────────────
 echo "[3/4] Removing OPA permissions..."
-if [[ -f "$ROOT_DIR/policies/tenants.json" ]]; then
-    python3 -c "import json, sys; d=json.load(open('$ROOT_DIR/policies/tenants.json')); d.pop('${TENANT_NAME}', None); json.dump(d, open('$ROOT_DIR/policies/tenants.json', 'w'), indent=2)"
-    echo "   ✓ policies/tenants.json updated"
-fi
+python3 "$ROOT_DIR/scripts/tenant_manager.py" delete \
+    --tenants-dir "$ROOT_DIR/tenants" \
+    --name "$TENANT_NAME"
+python3 "$ROOT_DIR/scripts/tenant_manager.py" sync-policies \
+    --tenants-dir "$ROOT_DIR/tenants" \
+    --output "$ROOT_DIR/policies/tenants.json"
+echo "   ✓ policies/tenants.json regenerated from remaining tenant configs"
 
 # ── Step 4: Remove Envoy config & Files ───────────────────────────────────────
-echo "[4/4] Cleaning up Envoy config and local files..."
-
-# Remove VHost from envoy.yaml
-# We look for the block starting with '# ── Tenant: <name>' and ending with an empty line
-# This is a bit risky with sed, but let's try a python one-liner for safety
-python3 -c "
-import re
-path = '$ROOT_DIR/envoy/envoy.yaml'
-with open(path, 'r') as f:
-    c = f.read()
-# Regex to match the tenant block in vhosts and clusters
-c = re.sub(r' +-# ── Tenant: ${TENANT_NAME}.*?\n\n', '', c, flags=re.DOTALL)
-c = re.sub(r'    - name: ${TENANT_NAME}_cluster.*?\n\n', '', c, flags=re.DOTALL)
-with open(path, 'w') as f:
-    f.write(c)
-"
-echo "   ✓ envoy.yaml cleaned"
-
-# Delete tenant directory
-if [[ -d "$ROOT_DIR/tenants/${TENANT_NAME}" ]]; then
-    rm -rf "$ROOT_DIR/tenants/${TENANT_NAME}"
-    echo "   ✓ tenants/${TENANT_NAME}/ directory deleted"
-fi
+echo "[4/4] Rendering Envoy config from remaining tenant definitions..."
+python3 "$ROOT_DIR/scripts/tenant_manager.py" sync-envoy \
+    --tenants-dir "$ROOT_DIR/tenants" \
+    --envoy-yaml "$ROOT_DIR/envoy/envoy.yaml"
+echo "   ✓ envoy.yaml regenerated"
 
 echo ""
 echo "Reloading Envoy..."
