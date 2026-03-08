@@ -428,103 +428,10 @@ def extract_roles(claims: dict) -> list[str]:
 
 # ─── Endpoints ───────────────────────────────────────────────────────────────
 
-# ─── ZTAM Platform Login Page (served directly by auth-middleware) ──────────
-# This page is routed at /ztam/login on every ZTAM virtual host.
-# Clients never need their own login page — the platform handles it.
-_ZTAM_LOGIN_HTML = """\
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>ZTAM — Sign in</title>
-  <style>
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0 }
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      background: #0f172a; min-height: 100vh;
-      display: flex; align-items: center; justify-content: center; }
-    .card { background: #1e293b; border: 1px solid #334155; border-radius: 12px;
-      padding: 2.5rem 2rem; width: 100%; max-width: 380px; }
-    .logo { display: flex; align-items: center; gap: 10px; margin-bottom: 2rem }
-    .logo-icon { width: 36px; height: 36px;
-      background: linear-gradient(135deg, #3b82f6, #1d4ed8);
-      border-radius: 8px; display: flex; align-items: center;
-      justify-content: center; color: #fff; font-weight: 800; font-size: 16px }
-    .logo-text { color: #64748b; font-size: 12px }
-    .logo-text strong { color: #e2e8f0; display: block; font-size: 14px }
-    h1 { color: #f1f5f9; font-size: 1.35rem; font-weight: 600; margin-bottom: .25rem }
-    .subtitle { color: #94a3b8; font-size: .875rem; margin-bottom: 1.75rem }
-    .subtitle span { color: #60a5fa; font-weight: 500 }
-    .field { margin-bottom: 1rem }
-    label { display: block; color: #64748b; font-size: .75rem; font-weight: 600;
-      text-transform: uppercase; letter-spacing: .06em; margin-bottom: .35rem }
-    input { width: 100%; background: #0f172a; border: 1px solid #334155;
-      border-radius: 8px; padding: .65rem .9rem; color: #e2e8f0;
-      font-size: .95rem; outline: none; transition: border-color .15s }
-    input:focus { border-color: #3b82f6 }
-    button { width: 100%; background: #2563eb; color: #fff; border: none;
-      border-radius: 8px; padding: .7rem; font-size: .95rem; font-weight: 600;
-      cursor: pointer; margin-top: .5rem; transition: background .15s }
-    button:hover:not(:disabled) { background: #1d4ed8 }
-    button:disabled { opacity: .55; cursor: default }
-    .error { background: #450a0a; border: 1px solid #7f1d1d; color: #fca5a5;
-      border-radius: 8px; padding: .6rem .85rem; font-size: .875rem;
-      margin-bottom: 1rem; display: none }
-    .footer { color: #334155; font-size: .7rem; text-align: center; margin-top: 1.5rem }
-  </style>
-</head>
-<body><div class="card">
-  <div class="logo">
-    <div class="logo-icon">Z</div>
-    <div class="logo-text"><strong>Zero-Trust Access</strong>Secured by ZTAM</div>
-  </div>
-  <h1>Sign in</h1>
-  <p class="subtitle">Access to <span id="tl">this resource</span> is protected</p>
-  <div class="error" id="err"></div>
-  <form id="f">
-    <div class="field">
-      <label>Username</label>
-      <input id="u" type="text" name="username" autocomplete="username" autofocus required>
-    </div>
-    <div class="field">
-      <label>Password</label>
-      <input id="p" type="password" name="password" autocomplete="current-password" required>
-    </div>
-    <button id="btn" type="submit">Sign in</button>
-  </form>
-  <p class="footer">&#128274; All access is verified, logged and zero-trust enforced</p>
-</div><script>
-(function() {
-  var next = new URLSearchParams(window.location.search).get('next') || '/';
-  var t = window.location.hostname.split('.')[0];
-  if (t && t !== 'localhost') document.getElementById('tl').textContent = t;
-  document.getElementById('f').addEventListener('submit', function(e) {
-    e.preventDefault();
-    var btn = document.getElementById('btn');
-    var err = document.getElementById('err');
-    btn.disabled = true; btn.textContent = 'Signing in\u2026'; err.style.display = 'none';
-    fetch('/ztam/login', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({
-        username: document.getElementById('u').value.trim(),
-        password: document.getElementById('p').value,
-        next: next
-      })
-    })
-    .then(function(r) { return r.json().then(function(d) { return {ok: r.ok, d: d}; }); })
-    .then(function(res) {
-      if (!res.ok) throw new Error(res.d.error || 'Login failed');
-      window.location.href = res.d.redirect || next;
-    })
-    .catch(function(e) {
-      err.textContent = e.message; err.style.display = 'block';
-      btn.disabled = false; btn.textContent = 'Sign in';
-    });
-  });
-})();
-</script></body></html>
-"""
+# ─── ZTAM Platform Login (Direct Redirect to Keycloak) ────────────────────────
+# This endpoint now redirects the browser directly to Keycloak's original
+# login interface, providing a more secure and consistent experience.
+# Previous custom HTML form (_ZTAM_LOGIN_HTML) has been removed.
 
 _ZTAM_DENIED_HTML = """\
 <!DOCTYPE html><html lang="en"><head>
@@ -563,9 +470,31 @@ async def metrics() -> Response:
 
 
 @app.get("/ztam/login")
-async def ztam_login_page(next: str = "/") -> Response:
-    """Serve the ZTAM platform login page. Linked to by auth redirects."""
-    return Response(content=_ZTAM_LOGIN_HTML, media_type="text/html")
+async def ztam_login_page(request: Request, next: str = "/") -> Response:
+    """Redirect to Keycloak's original login interface."""
+    # Try to identify tenant from Host header to use correct realm/client
+    host_header = request.headers.get("host", "")
+    tenant_config = get_tenant_config(host_header)
+    
+    tenant_name = (tenant_config or {}).get("name", "")
+    client_id = (tenant_config or {}).get("keycloak_client_id") or KC_CLIENT_ID
+    realm = (tenant_config or {}).get("keycloak_realm", KC_REALM)
+    callback_url = build_callback_url(request, tenant_name)
+    
+    auth_uri = (
+        f"{KC_ISSUER_URL}/realms/{realm}/protocol/openid-connect/auth?"
+        + urlencode(
+            {
+                "client_id": client_id,
+                "response_type": "code",
+                "scope": "openid profile email",
+                "redirect_uri": callback_url,
+                "state": next,
+            }
+        )
+    )
+    _log_event(logging.INFO, "ztam_login_redirect_to_keycloak", request=request, tenant=tenant_name, redirect_to=auth_uri)
+    return Response(status_code=302, headers={"Location": auth_uri})
 
 
 @app.post("/ztam/login")
