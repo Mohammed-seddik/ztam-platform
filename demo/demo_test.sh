@@ -4,8 +4,14 @@ set -euo pipefail
 KC_BASE="${KEYCLOAK_URL:-http://localhost:8080}"
 KC_REALM="${KC_REALM:-test-tenant}"
 KC_CLIENT="${KC_CLIENT_ID:-test-app}"
-KC_SECRET="${KC_CLIENT_SECRET:-test-app-secret-2024}"
-ADMIN_PASS="${KC_ADMIN_PASS:-admin_secret_456}"
+KC_SECRET="${KC_CLIENT_SECRET:-}"
+ADMIN_PASS="${KC_ADMIN_PASS:-}"
+DEMO_ALICE_PASSWORD="${DEMO_ALICE_PASSWORD:-}"
+
+if [[ -z "$KC_SECRET" || -z "$ADMIN_PASS" || -z "$DEMO_ALICE_PASSWORD" ]]; then
+  echo "ERROR: KC_CLIENT_SECRET, KC_ADMIN_PASS, and DEMO_ALICE_PASSWORD must be set."
+  exit 1
+fi
 
 echo "============================================================"
 echo " ZTAM FULL FLOW DEMO"
@@ -46,7 +52,7 @@ PY
 echo ""
 echo "--- LOGIN alice via Keycloak (SPI reads from testapp-db) ---"
 RESP=$(curl -s -X POST "$KC_BASE/realms/$KC_REALM/protocol/openid-connect/token" \
-  -d "grant_type=password&client_id=$KC_CLIENT&client_secret=$KC_SECRET&username=alice&password=secret123")
+  -d "grant_type=password&client_id=$KC_CLIENT&client_secret=$KC_SECRET&username=alice&password=$DEMO_ALICE_PASSWORD")
 
 echo "$RESP" | python3 - <<'PY'
 import base64

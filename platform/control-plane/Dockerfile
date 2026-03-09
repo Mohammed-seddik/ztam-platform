@@ -12,6 +12,12 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY platform/control-plane/main.py ./main.py
 COPY scripts/tenant_manager.py /app/scripts/tenant_manager.py
 
+RUN addgroup --system appuser \
+    && adduser --system --ingroup appuser appuser \
+    && mkdir -p /data \
+    && chown -R appuser:appuser /app /data
+USER appuser
+
 EXPOSE 8010
 
 HEALTHCHECK --interval=10s --timeout=5s --retries=5 \

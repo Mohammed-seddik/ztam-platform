@@ -43,8 +43,8 @@ Say:
 
 Use the bundled demo users:
 
-- `alice / secret123` as admin
-- `charlie / pass123` as limited user
+- `alice / $DEMO_ALICE_PASSWORD` as admin
+- `charlie / $DEMO_CHARLIE_PASSWORD` as limited user
 
 Show:
 
@@ -76,7 +76,7 @@ python3 scripts/tenant_manager.py assess \
    --backend-url https://app.customer.com \
    --name newclient \
    --hostname newclient.ztam.local \
-   --roles "admin,manager,user" \
+   --roles "admin,editor,user,viewer" \
    --write-config
 ```
 
@@ -134,7 +134,7 @@ curl -I -s http://127.0.0.1:3001/login | head -n 1
 Do this once before you sleep and once tomorrow before the teacher arrives.
 
 1. Open `https://localhost` and confirm the login page appears.
-2. Log in with `alice / secret123` and confirm the app loads.
+2. Log in with `alice / $DEMO_ALICE_PASSWORD` and confirm the app loads.
 3. Open Grafana at `http://127.0.0.1:3001` and confirm `ZTAM Overview` exists.
 4. Open Prometheus at `http://127.0.0.1:9090` and confirm it is ready.
 5. Keep these files ready in the editor:

@@ -65,6 +65,29 @@ static_resources:
                     typed_config:
                       "@type": type.googleapis.com/envoy.extensions.access_loggers.stream.v3.StdoutAccessLog
                 http_filters:
+                  - name: envoy.filters.http.local_ratelimit
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.local_ratelimit.v3.LocalRateLimit
+                      stat_prefix: global_http_rate_limiter
+                      token_bucket:
+                        max_tokens: 300
+                        tokens_per_fill: 300
+                        fill_interval: 1s
+                      filter_enabled:
+                        runtime_key: local_rate_limit_enabled
+                        default_value:
+                          numerator: 100
+                          denominator: HUNDRED
+                      filter_enforced:
+                        runtime_key: local_rate_limit_enforced
+                        default_value:
+                          numerator: 100
+                          denominator: HUNDRED
+                      response_headers_to_add:
+                        - append_action: OVERWRITE_IF_EXISTS_OR_ADD
+                          header:
+                            key: x-rate-limit
+                            value: global
                   # Strip trust headers from client requests BEFORE ext_authz runs.
                   # This prevents header spoofing while allowing ext_authz to
                   # re-add validated headers that reach the upstream correctly.
@@ -74,10 +97,18 @@ static_resources:
                       default_source_code:
                         inline_string: |
                           function envoy_on_request(handle)
-                            handle:headers():remove("x-username")
-                            handle:headers():remove("x-user-roles")
-                            handle:headers():remove("x-user-id")
-                            handle:headers():remove("x-tenant-id")
+                            local headers = handle:headers()
+                            local to_remove = {}
+                            for key, _ in pairs(headers) do
+                              local lower = string.lower(key)
+                              if string.sub(lower, 1, 7) == "x-user-" then
+                                table.insert(to_remove, key)
+                              end
+                            end
+                            for _, key in ipairs(to_remove) do
+                              headers:remove(key)
+                            end
+                            headers:remove("x-tenant-id")
                           end
                   - name: envoy.filters.http.ext_authz
                     typed_config:
@@ -91,6 +122,9 @@ static_resources:
                           timeout: 5s
                         path_prefix: ""
                         authorization_request:
+                          headers_to_add:
+                            - key: x-ztam-internal-auth
+                              value: "%ENVIRONMENT(ENVOY_AUTH_SHARED_SECRET)%"
                           allowed_headers:
                             patterns:
                               - exact: authorization
@@ -145,6 +179,11 @@ static_resources:
                           route:
                             cluster: auth_middleware_cluster
                             timeout: 10s
+                          request_headers_to_add:
+                            - append_action: OVERWRITE_IF_EXISTS_OR_ADD
+                              header:
+                                key: x-ztam-internal-auth
+                                value: "%ENVIRONMENT(ENVOY_AUTH_SHARED_SECRET)%"
                           typed_per_filter_config:
                             envoy.filters.http.ext_authz:
                               "@type": type.googleapis.com/envoy.extensions.filters.http.ext_authz.v3.ExtAuthzPerRoute
@@ -155,6 +194,11 @@ static_resources:
                             cluster: auth_middleware_cluster
                             prefix_rewrite: "/login-proxy"
                             timeout: 10s
+                          request_headers_to_add:
+                            - append_action: OVERWRITE_IF_EXISTS_OR_ADD
+                              header:
+                                key: x-ztam-internal-auth
+                                value: "%ENVIRONMENT(ENVOY_AUTH_SHARED_SECRET)%"
                           typed_per_filter_config:
                             envoy.filters.http.ext_authz:
                               "@type": type.googleapis.com/envoy.extensions.filters.http.ext_authz.v3.ExtAuthzPerRoute
@@ -165,6 +209,11 @@ static_resources:
                             cluster: auth_middleware_cluster
                             prefix_rewrite: "/logout"
                             timeout: 10s
+                          request_headers_to_add:
+                            - append_action: OVERWRITE_IF_EXISTS_OR_ADD
+                              header:
+                                key: x-ztam-internal-auth
+                                value: "%ENVIRONMENT(ENVOY_AUTH_SHARED_SECRET)%"
                           typed_per_filter_config:
                             envoy.filters.http.ext_authz:
                               "@type": type.googleapis.com/envoy.extensions.filters.http.ext_authz.v3.ExtAuthzPerRoute
@@ -219,6 +268,11 @@ static_resources:
                           route:
                             cluster: auth_middleware_cluster
                             timeout: 10s
+                          request_headers_to_add:
+                            - append_action: OVERWRITE_IF_EXISTS_OR_ADD
+                              header:
+                                key: x-ztam-internal-auth
+                                value: "%ENVIRONMENT(ENVOY_AUTH_SHARED_SECRET)%"
                           typed_per_filter_config:
                             envoy.filters.http.ext_authz:
                               "@type": type.googleapis.com/envoy.extensions.filters.http.ext_authz.v3.ExtAuthzPerRoute
@@ -243,15 +297,6 @@ static_resources:
                               "@type": type.googleapis.com/envoy.extensions.filters.http.ext_authz.v3.ExtAuthzPerRoute
                               disabled: true
                         - match:
-                            prefix: "/dashboard.html"
-                          route:
-                            cluster: backend_cluster
-                            timeout: 5s
-                          typed_per_filter_config:
-                            envoy.filters.http.ext_authz:
-                              "@type": type.googleapis.com/envoy.extensions.filters.http.ext_authz.v3.ExtAuthzPerRoute
-                              disabled: true
-                        - match:
                             prefix: "/register.html"
                           route:
                             cluster: backend_cluster
@@ -268,6 +313,11 @@ static_resources:
                             cluster: auth_middleware_cluster
                             prefix_rewrite: "/login-proxy"
                             timeout: 10s
+                          request_headers_to_add:
+                            - append_action: OVERWRITE_IF_EXISTS_OR_ADD
+                              header:
+                                key: x-ztam-internal-auth
+                                value: "%ENVIRONMENT(ENVOY_AUTH_SHARED_SECRET)%"
                           typed_per_filter_config:
                             envoy.filters.http.ext_authz:
                               "@type": type.googleapis.com/envoy.extensions.filters.http.ext_authz.v3.ExtAuthzPerRoute
@@ -290,6 +340,11 @@ static_resources:
                             cluster: auth_middleware_cluster
                             prefix_rewrite: "/logout"
                             timeout: 10s
+                          request_headers_to_add:
+                            - append_action: OVERWRITE_IF_EXISTS_OR_ADD
+                              header:
+                                key: x-ztam-internal-auth
+                                value: "%ENVIRONMENT(ENVOY_AUTH_SHARED_SECRET)%"
                           typed_per_filter_config:
                             envoy.filters.http.ext_authz:
                               "@type": type.googleapis.com/envoy.extensions.filters.http.ext_authz.v3.ExtAuthzPerRoute
@@ -345,3 +400,10 @@ static_resources:
                       address: testapp
                       port_value: 3000
 # __ZTAM_TENANT_CLUSTERS_END__ (generated by tenant_manager.py)
+
+admin:
+  access_log_path: /tmp/admin_access.log
+  address:
+    socket_address:
+      address: 127.0.0.1
+      port_value: 9901

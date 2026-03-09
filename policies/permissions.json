@@ -1,6 +1,24 @@
 {
   "permissions": {
     "roles": {
+      "admin": {
+        "allowed_paths": [
+          "/"
+        ],
+        "allowed_exact_paths": [
+          "/"
+        ],
+        "denied_paths": [],
+        "allowed_methods": [
+          "GET",
+          "POST",
+          "PUT",
+          "PATCH",
+          "DELETE",
+          "HEAD",
+          "OPTIONS"
+        ]
+      },
       "user": {
         "allowed_paths": [
           "/api/"

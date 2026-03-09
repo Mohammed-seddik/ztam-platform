@@ -28,6 +28,7 @@ public class MySqlUserStorageProvider
 
     private static final Logger LOG =
             Logger.getLogger(MySqlUserStorageProvider.class.getName());
+    private static final int DB_MAX_RETRIES = 4;
 
     private final KeycloakSession session;
     private final ComponentModel  model;
@@ -157,7 +158,7 @@ public class MySqlUserStorageProvider
                 }
             }
         } catch (SQLException e) {
-            LOG.log(Level.SEVERE, "[ZTAM SPI] DB error during user lookup: " + e.getMessage(), e);
+            LOG.log(Level.SEVERE, "[ZTAM SPI] User lookup failed due to backend DB error", e);
         }
         return null;
     }
@@ -178,13 +179,30 @@ public class MySqlUserStorageProvider
                 if (rs.next()) return rs.getString(passwordCol);
             }
         } catch (SQLException e) {
-            LOG.log(Level.SEVERE, "[ZTAM SPI] DB error fetching hash: " + e.getMessage(), e);
+            LOG.log(Level.SEVERE, "[ZTAM SPI] Password hash lookup failed due to backend DB error", e);
         }
         return null;
     }
 
     private Connection openConnection() throws SQLException {
-        return DriverManager.getConnection(jdbcUrl, dbUser, dbPass);
+        SQLException last = null;
+        for (int attempt = 0; attempt < DB_MAX_RETRIES; attempt++) {
+            try {
+                return DriverManager.getConnection(jdbcUrl, dbUser, dbPass);
+            } catch (SQLException ex) {
+                last = ex;
+                long backoffMs = Math.min(2000L, 200L * (1L << attempt));
+                LOG.log(Level.WARNING, "[ZTAM SPI] DB connection attempt {0} failed; retrying in {1} ms",
+                        new Object[]{attempt + 1, backoffMs});
+                try {
+                    Thread.sleep(backoffMs);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+        }
+        throw new SQLException("Unable to connect to external user database", last);
     }
 
     /**
@@ -226,7 +244,16 @@ public class MySqlUserStorageProvider
      */
     static String normalizeRole(String raw) {
         if (raw == null || raw.isBlank()) return "viewer";
-        return raw.toLowerCase().trim();
+        String canonical = raw.toLowerCase().trim();
+        switch (canonical) {
+            case "admin":
+            case "editor":
+            case "user":
+            case "viewer":
+                return canonical;
+            default:
+                return "viewer";
+        }
     }
 
     /** Wrap identifier in backticks (MySQL) or double quotes (PostgreSQL) to prevent SQL identifier injection. */

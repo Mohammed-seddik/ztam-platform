@@ -207,7 +207,7 @@ Use this list in the first meeting.
 
 If the first client arrives and you have limited time, use this default decision model:
 
-1. Run `python3 scripts/tenant_manager.py assess --backend-url <client-url> --name <tenant> --hostname <host> --roles "admin,manager,user" --write-config`.
+1. Run `python3 scripts/tenant_manager.py assess --backend-url <client-url> --name <tenant> --hostname <host> --roles "admin,editor,user,viewer" --write-config`.
 2. If the site clearly has its own login page, start with `form` mode.
 3. If the site does not have a clean login flow, use `keycloak` mode.
 4. Only use DB federation if the client explicitly wants to reuse existing user credentials and can provide read-only DB access plus hash details.

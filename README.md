@@ -154,10 +154,10 @@ All users live in the bundled demo app's MySQL DB. Keycloak reads and authentica
 
 | Username   | Password    | Role      | What they see            |
 | ---------- | ----------- | --------- | ------------------------ |
-| `alice`    | `secret123` | **admin** | All tasks from all users |
-| `charlie`  | `pass123`   | **user**  | Only their own tasks     |
-| `testuser` | `test123`   | **user**  | Only their own tasks     |
-| `demouser` | `demo123`   | **admin** | All tasks from all users |
+| `alice`    | `$DEMO_ALICE_PASSWORD`   | **admin** | All tasks from all users |
+| `charlie`  | `$DEMO_CHARLIE_PASSWORD` | **user**  | Only their own tasks     |
+| `testuser` | app DB managed           | **user**  | Only their own tasks     |
+| `demouser` | app DB managed           | **admin** | All tasks from all users |
 
 ---
 
@@ -179,7 +179,7 @@ If you are onboarding a real client, do not start by hand-editing configs.
 Use this order:
 
 1. Read `docs/operators/CLIENT_INTEGRATION_PATTERNS.md` to classify the client type.
-2. Run `python3 scripts/tenant_manager.py assess --backend-url <client-url> --name <tenant> --hostname <host> --roles "admin,manager,user" --write-config`.
+2. Run `python3 scripts/tenant_manager.py assess --backend-url <client-url> --name <tenant> --hostname <host> --roles "admin,editor,user,viewer" --write-config`.
 3. Confirm the recommended login mode, role list, and any redirect or cookie risks.
 4. Follow `docs/operators/ONBOARDING_PLAYBOOK.md` for tenant creation, validation, smoke test, and handoff.
 5. Do not release until `docs/operators/GO_LIVE_CHECKLIST.md` is closed.
@@ -295,7 +295,7 @@ python3 scripts/tenant_manager.py assess \
   --backend-url https://app.customer.com \
   --name customerapp \
   --hostname customerapp.yourdomain.com \
-  --roles "admin,manager,user" \
+  --roles "admin,editor,user,viewer" \
   --write-config
 ```
 
@@ -444,7 +444,7 @@ docker compose down -v
 # Quick end-to-end test (HTTPS)
 TOKEN=$(curl -sk -X POST https://localhost/api/auth/login \
   -H "Content-Type: application/json" \
-  -d '{"username":"alice","password":"secret123"}' | jq -r .token)
+  -d "{\"username\":\"alice\",\"password\":\"${DEMO_ALICE_PASSWORD}\"}" | jq -r .token)
 
 curl -sk https://localhost/api/tasks \
   -H "Authorization: Bearer $TOKEN" | jq .

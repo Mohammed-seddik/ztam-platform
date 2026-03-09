@@ -187,7 +187,7 @@ test_no_roles_deny_reason if {
 _tenant_perms := {
     "myapp": {
         "roles": {
-            "manager": {
+            "editor": {
                 "allowed_paths":   ["/api/"],
                 "allowed_exact_paths": ["/", "/dashboard.html"],
                 "denied_paths":    ["/admin/"],
@@ -199,7 +199,7 @@ _tenant_perms := {
 
 test_tenant_specific_role_allowed if {
     authz.allow
-      with input as {"user": {"id": "u5", "roles": ["manager"], "tenant_id": "myapp"},
+      with input as {"user": {"id": "u5", "roles": ["editor"], "tenant_id": "myapp"},
                      "request": {"method": "GET", "path": "/api/reports"}}
       with data.tenants as _tenant_perms
       with data.permissions as _perms
@@ -207,7 +207,7 @@ test_tenant_specific_role_allowed if {
 
 test_tenant_specific_role_denied_admin_path if {
     not authz.allow
-      with input as {"user": {"id": "u5", "roles": ["manager"], "tenant_id": "myapp"},
+      with input as {"user": {"id": "u5", "roles": ["editor"], "tenant_id": "myapp"},
                      "request": {"method": "DELETE", "path": "/admin/users"}}
       with data.tenants as _tenant_perms
       with data.permissions as _perms
@@ -217,7 +217,7 @@ test_v1_auth_context_shape if {
     authz.allow
       with input as {
           "tenant": {"id": "myapp", "integration_mode": "managed_oidc", "identity_mode": "managed"},
-          "subject": {"id": "u7", "roles": ["manager"], "email": "u7@example.com"},
+          "subject": {"id": "u7", "roles": ["editor"], "email": "u7@example.com"},
           "request": {"method": "GET", "path": "/api/reports"},
           "client": {"type": "browser", "host": "myapp.example.com"},
           "device": {"posture": "unknown"}

@@ -93,7 +93,7 @@ That prevents the two most common mistakes:
   --name     myapp                         \
   --backend  https://myapp.railway.app     \
   --hostname myapp.yourdomain.com          \
-  --roles    "admin,manager,user,viewer"
+  --roles    "admin,editor,user,viewer"
 
 # Optional flags:
 #   --login-mode keycloak   # Hosted Keycloak login instead of ZTAM form login
@@ -182,22 +182,22 @@ After DNS change (`myapp.yourdomain.com → your-server-ip`):
 
 ### Case 3: App with Custom Roles
 
-**Client**: "We have 4 roles: `owner`, `accountant`, `employee`, `auditor`"
+**Client**: "We have 4 roles that map cleanly to `admin`, `editor`, `user`, `viewer`"
 
 ```bash
 ./scripts/onboard-tenant.sh \
   --name     acmecorp \
   --backend  https://app.acmecorp.com \
   --hostname acmecorp.yourdomain.com \
-  --roles    "admin,owner,accountant,employee,auditor"
+  --roles    "admin,editor,user,viewer"
 ```
 
-Then customize `tenants/acmecorp/config.json` to define exactly what each role can access, then regenerate the policy file:
+Then customize `tenants/acmecorp/config.json` to define exactly what each supported role can access, then regenerate the policy file:
 
 ```json
 {
   "name": "acmecorp",
-  "roles": ["admin", "owner", "accountant", "employee", "auditor"],
+  "roles": ["admin", "editor", "user", "viewer"],
   "permissions": {
     "owner": {
       "allowed_paths": ["/api/"],

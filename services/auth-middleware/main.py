@@ -5,17 +5,21 @@ Real JWT validation (RS256 via JWKS), real OPA call, real token translation.
 
 import asyncio
 import collections
+import hashlib
 import json
 import os
+import re
 import threading
 import time
 import logging
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit, urlunsplit
 
 import httpx
+from redis.asyncio import Redis
 from fastapi import FastAPI, Request, Response
 from jose import JWTError, jwt
 
@@ -97,6 +101,45 @@ def _log_event(level: int, event: str, request: Optional[Request] = None, **fiel
     logger.log(level, event, extra=extra)
 
 
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _client_ip(request: Optional[Request]) -> str:
+    if request is None:
+        return ""
+    xff = request.headers.get("x-forwarded-for", "")
+    if xff:
+        return xff.split(",")[0].strip()
+    if request.client:
+        return request.client.host
+    return ""
+
+
+def _audit_event(
+    event: str,
+    request: Optional[Request],
+    *,
+    user_id: str = "",
+    tenant_id: str = "",
+    reason: str = "",
+) -> None:
+    logger.info(
+        "audit_event",
+        extra={
+            "event": event,
+            "timestamp": _utc_now_iso(),
+            "user_id": user_id or "",
+            "tenant_id": tenant_id or "",
+            "path": request.url.path if request is not None else "",
+            "method": request.method if request is not None else "",
+            "ip": _client_ip(request),
+            "reason": reason or "",
+            "request_id": _request_id(request),
+        },
+    )
+
+
 @app.middleware("http")
 async def attach_request_context(request: Request, call_next):
     request_id = (
@@ -143,6 +186,24 @@ async def attach_request_context(request: Request, call_next):
         )
     return response
 
+
+@app.middleware("http")
+async def enforce_envoy_shared_secret(request: Request, call_next):
+    if request.url.path not in {"/health", "/metrics"}:
+        supplied = request.headers.get("x-ztam-internal-auth", "")
+        if supplied != ENVOY_AUTH_SHARED_SECRET:
+            _audit_event(
+                "deny",
+                request,
+                reason="missing_or_invalid_internal_shared_secret",
+            )
+            return Response(
+                content='{"error":"forbidden"}',
+                status_code=403,
+                media_type="application/json",
+            )
+    return await call_next(request)
+
 # ─── Config from environment ─────────────────────────────────────────────────
 KEYCLOAK_URL: str = os.getenv("KEYCLOAK_URL", "http://keycloak:8080")
 KC_REALM: str = os.getenv("KC_REALM", "test-tenant")
@@ -150,6 +211,13 @@ KC_CLIENT_ID: str = os.getenv("KC_CLIENT_ID", "test-app")
 KC_CLIENT_SECRET: str = os.getenv("KC_CLIENT_SECRET", "")
 OPA_URL: str = os.getenv("OPA_URL", "http://opa:8181")
 TESTAPP_JWT_SECRET: Optional[str] = os.getenv("TESTAPP_JWT_SECRET")
+REDIS_URL: str = os.getenv("REDIS_URL", "redis://redis:6379/0")
+ENVOY_AUTH_SHARED_SECRET: str = os.getenv("ENVOY_AUTH_SHARED_SECRET", "")
+OPA_TIMEOUT_SECONDS: float = float(os.getenv("OPA_TIMEOUT_SECONDS", "2.0"))
+HTTP_TIMEOUT_SECONDS: float = float(os.getenv("HTTP_TIMEOUT_SECONDS", "5.0"))
+JWKS_TTL: int = int(os.getenv("JWKS_TTL_SECONDS", "300"))
+REDIS_RETRY_ATTEMPTS: int = int(os.getenv("REDIS_RETRY_ATTEMPTS", "4"))
+HTTP_RETRY_ATTEMPTS: int = int(os.getenv("HTTP_RETRY_ATTEMPTS", "4"))
 # KC_ISSUER_URL: the public-facing URL Keycloak uses in the `iss` claim.
 # Typically differs from KEYCLOAK_URL (internal Docker hostname) when
 # Keycloak is configured with KC_HOSTNAME pointing to the public host.
@@ -176,12 +244,25 @@ AUTH_METADATA_FILE = Path(
 _jwks_cache: dict = {}
 _jwks_fetched_at: float = 0.0
 _jwks_lock = asyncio.Lock()
-JWKS_TTL: int = 300  # seconds
+_redis: Optional[Redis] = None
+
+_ALLOWED_ROLES = {"admin", "editor", "user", "viewer"}
+_TENANT_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 
 # ─── Startup validation — crash immediately if required secrets are empty ─────
 if not KC_CLIENT_SECRET:
     raise RuntimeError(
         "FATAL: required environment variable 'KC_CLIENT_SECRET' is not set. "
+        "Refusing to start."
+    )
+if not TESTAPP_JWT_SECRET:
+    raise RuntimeError(
+        "FATAL: required environment variable 'TESTAPP_JWT_SECRET' is not set. "
+        "Refusing to start."
+    )
+if not ENVOY_AUTH_SHARED_SECRET:
+    raise RuntimeError(
+        "FATAL: required environment variable 'ENVOY_AUTH_SHARED_SECRET' is not set. "
         "Refusing to start."
     )
 
@@ -367,7 +448,7 @@ def _load_tenant_cache() -> tuple[dict[str, dict], dict[str, dict]]:
                     if str(raw_config.get("login_mode", "form")).strip() == "keycloak"
                     else "form_bridge",
                     "identity_mode": "federated_db" if bool(raw_config.get("no_spi", False)) else "managed",
-                    "adapter_mode": "translated_token" if tenant_name == "testapp" else "headers",
+                    "adapter_mode": str(raw_config.get("adapter_mode", "headers")).strip() or "headers",
                     "status": "published",
                     "keycloak_client_id": str(raw_config.get("keycloak_client_id", tenant_name)).strip() or tenant_name,
                     "keycloak_client_secret": str(raw_config.get("keycloak_client_secret", "")).strip(),
@@ -443,11 +524,25 @@ def build_keycloak_logout_url(
 
 @app.on_event("startup")
 async def _start_rl_cleanup() -> None:
+    client = await _redis_client()
+    try:
+        await client.ping()
+    except Exception as exc:
+        raise RuntimeError(f"FATAL: redis unavailable at startup ({REDIS_URL}): {exc}") from exc
+
     async def _loop():
         while True:
             await asyncio.sleep(300)  # every 5 minutes
             _cleanup_rate_limiter()
     asyncio.create_task(_loop())
+
+
+@app.on_event("shutdown")
+async def _close_redis() -> None:
+    global _redis
+    if _redis is not None:
+        await _redis.close()
+        _redis = None
 
 
 # Keycloak internal roles that should never reach OPA or downstream headers
@@ -458,8 +553,123 @@ _KC_INTERNAL_ROLES = frozenset({
 })
 
 
+def _normalize_path(path: str, query: str = "") -> str:
+    raw = path or "/"
+    if not raw.startswith("/"):
+        raw = "/" + raw
+    parts = urlsplit(raw)
+    clean_path = "/" + "/".join([p for p in parts.path.split("/") if p and p != "."])
+    while "//" in clean_path:
+        clean_path = clean_path.replace("//", "/")
+    if ".." in clean_path.split("/"):
+        clean_path = "/"
+    safe_query = query or parts.query
+    return urlunsplit(("", "", clean_path or "/", safe_query, ""))
+
+
+def _sanitize_tenant_id(candidate: str, fallback: str) -> str:
+    lowered = (candidate or "").strip().lower()
+    if lowered and _TENANT_ID_RE.match(lowered):
+        return lowered
+    fallback_lowered = (fallback or "unknown").strip().lower()
+    return fallback_lowered if _TENANT_ID_RE.match(fallback_lowered) else "unknown"
+
+
+def _sanitize_roles(raw_roles: list[str]) -> list[str]:
+    roles = [str(role).strip().lower() for role in raw_roles]
+    allowed = [role for role in roles if role in _ALLOWED_ROLES]
+    return list(dict.fromkeys(allowed))
+
+
+def _extract_token(request: Request) -> Optional[str]:
+    auth_header = request.headers.get("authorization", "")
+    if auth_header.lower().startswith("bearer "):
+        return auth_header[7:].strip()
+    cookie_value = request.cookies.get(AUTH_COOKIE_NAME, "")
+    return cookie_value.strip() or None
+
+
+async def _redis_client() -> Redis:
+    global _redis
+    if _redis is None:
+        _redis = Redis.from_url(REDIS_URL, encoding="utf-8", decode_responses=True)
+    return _redis
+
+
+def _backoff_seconds(attempt: int) -> float:
+    return min(2.0, 0.2 * (2 ** attempt))
+
+
+async def _request_with_retries(
+    method: str,
+    url: str,
+    *,
+    request: Optional[Request] = None,
+    timeout: float = HTTP_TIMEOUT_SECONDS,
+    retry_attempts: int = HTTP_RETRY_ATTEMPTS,
+    **kwargs,
+) -> httpx.Response:
+    last_error: Optional[Exception] = None
+    for attempt in range(retry_attempts):
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                response = await client.request(method, url, **kwargs)
+                if response.status_code >= 500:
+                    raise httpx.HTTPStatusError(
+                        f"upstream returned {response.status_code}",
+                        request=response.request,
+                        response=response,
+                    )
+                return response
+        except Exception as exc:
+            last_error = exc
+            if attempt == retry_attempts - 1:
+                break
+            wait_seconds = _backoff_seconds(attempt)
+            _log_event(
+                logging.WARNING,
+                "upstream_request_retry",
+                request=request,
+                upstream_url=url,
+                attempt=attempt + 1,
+                wait_seconds=wait_seconds,
+                error=str(exc),
+            )
+            await asyncio.sleep(wait_seconds)
+    raise RuntimeError(f"upstream request failed after retries: {url}") from last_error
+
+
+async def _redis_get_with_retries(key: str) -> Optional[str]:
+    last_error: Optional[Exception] = None
+    for attempt in range(REDIS_RETRY_ATTEMPTS):
+        try:
+            client = await _redis_client()
+            return await client.get(key)
+        except Exception as exc:
+            last_error = exc
+            if attempt == REDIS_RETRY_ATTEMPTS - 1:
+                break
+            await asyncio.sleep(_backoff_seconds(attempt))
+    raise RuntimeError(f"redis get failed for key {key}") from last_error
+
+
+async def _redis_setex_with_retries(key: str, ttl_seconds: int, value: str) -> None:
+    last_error: Optional[Exception] = None
+    for attempt in range(REDIS_RETRY_ATTEMPTS):
+        try:
+            client = await _redis_client()
+            await client.setex(key, ttl_seconds, value)
+            return
+        except Exception as exc:
+            last_error = exc
+            if attempt == REDIS_RETRY_ATTEMPTS - 1:
+                break
+            await asyncio.sleep(_backoff_seconds(attempt))
+    raise RuntimeError(f"redis setex failed for key {key}") from last_error
+
+
 async def get_jwks() -> dict:
-    """Fetch and cache Keycloak JWKS. Thread-safe under concurrent async requests."""
+    """Fetch and cache Keycloak JWKS in Redis + local memory cache."""
     global _jwks_cache, _jwks_fetched_at
 
     now = time.time()
@@ -472,13 +682,20 @@ async def get_jwks() -> dict:
         if _jwks_cache and (now - _jwks_fetched_at) < JWKS_TTL:
             return _jwks_cache
 
-        _log_event(logging.INFO, "jwks_fetch_started", jwks_uri=JWKS_URI)
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.get(JWKS_URI)
-            resp.raise_for_status()
-            _jwks_cache = resp.json()
+        cache_key = f"ztam:jwks:{KC_REALM}"
+        cached_value = await _redis_get_with_retries(cache_key)
+        if cached_value:
+            _jwks_cache = json.loads(cached_value)
             _jwks_fetched_at = time.time()
             return _jwks_cache
+
+        _log_event(logging.INFO, "jwks_fetch_started", jwks_uri=JWKS_URI)
+        response = await _request_with_retries("GET", JWKS_URI, timeout=HTTP_TIMEOUT_SECONDS)
+        response.raise_for_status()
+        _jwks_cache = response.json()
+        _jwks_fetched_at = time.time()
+        await _redis_setex_with_retries(cache_key, JWKS_TTL, json.dumps(_jwks_cache))
+        return _jwks_cache
 
 
 def extract_roles(claims: dict) -> list[str]:
@@ -608,30 +825,35 @@ async def ztam_login_post(request: Request) -> Response:
     if not _check_rate_limit(client_ip):
         _metric_inc("ztam_auth_login_attempts_total", flow="platform", outcome="rate_limited")
         _log_event(logging.WARNING, "platform_login_rate_limited", request=request, client_ip=client_ip)
+        _audit_event("login_failure", request, user_id=username, reason="rate_limited")
         return Response(content='{"error":"Too many login attempts, please try again later"}',
                         status_code=429, media_type="application/json")
 
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            kc_resp = await client.post(
-                KC_TOKEN_URI,
-                data={
-                    "grant_type":   "password",
-                    "client_id":    KC_CLIENT_ID,
-                    "client_secret": KC_CLIENT_SECRET,
-                    "username":     username,
-                    "password":     password,
-                },
-            )
+        kc_resp = await _request_with_retries(
+            "POST",
+            KC_TOKEN_URI,
+            request=request,
+            timeout=HTTP_TIMEOUT_SECONDS,
+            data={
+                "grant_type": "password",
+                "client_id": KC_CLIENT_ID,
+                "client_secret": KC_CLIENT_SECRET,
+                "username": username,
+                "password": password,
+            },
+        )
     except Exception as exc:
         _metric_inc("ztam_auth_failures_total", type="keycloak_unreachable", flow="platform")
         _log_event(logging.ERROR, "platform_login_keycloak_unreachable", request=request, client_ip=client_ip, error=str(exc))
+        _audit_event("login_failure", request, user_id=username, reason="keycloak_unreachable")
         return Response(content='{"error":"Auth service unavailable"}',
                         status_code=503, media_type="application/json")
 
     if kc_resp.status_code != 200:
         _metric_inc("ztam_auth_login_attempts_total", flow="platform", outcome="failed")
         _log_event(logging.WARNING, "platform_login_failed", request=request, username=username, client_ip=client_ip, status_code=kc_resp.status_code)
+        _audit_event("login_failure", request, user_id=username, reason="invalid_credentials")
         return Response(content='{"error":"Invalid credentials"}',
                         status_code=401, media_type="application/json")
 
@@ -651,6 +873,7 @@ async def ztam_login_post(request: Request) -> Response:
     uname: str = claims.get("preferred_username", username)
     _metric_inc("ztam_auth_login_attempts_total", flow="platform", outcome="succeeded")
     _log_event(logging.INFO, "platform_login_succeeded", request=request, username=uname, role=role)
+    _audit_event("login_success", request, user_id=str(claims.get("sub", uname)), reason="platform_login")
 
     resp = Response(
         content=json.dumps({"redirect": next_url, "username": uname, "role": role}),
@@ -716,6 +939,7 @@ async def login_proxy(request: Request):
     if not _check_rate_limit(client_ip):
         _metric_inc("ztam_auth_login_attempts_total", flow="proxy", outcome="rate_limited")
         _log_event(logging.WARNING, "login_proxy_rate_limited", request=request, client_ip=client_ip)
+        _audit_event("login_failure", request, user_id=username, reason="rate_limited")
         return Response(
             content='{"error":"too many login attempts, please try again later."}',
             status_code=429, media_type="application/json"
@@ -723,26 +947,30 @@ async def login_proxy(request: Request):
 
     # ── 1. Authenticate via Keycloak token endpoint ───────────────────────────
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            kc_resp = await client.post(
-                KC_TOKEN_URI,
-                data={
-                    "grant_type":    "password",
-                    "client_id":     KC_CLIENT_ID,
-                    "client_secret": KC_CLIENT_SECRET,
-                    "username":      username,
-                    "password":      password,
-                },
-            )
+        kc_resp = await _request_with_retries(
+            "POST",
+            KC_TOKEN_URI,
+            request=request,
+            timeout=HTTP_TIMEOUT_SECONDS,
+            data={
+                "grant_type": "password",
+                "client_id": KC_CLIENT_ID,
+                "client_secret": KC_CLIENT_SECRET,
+                "username": username,
+                "password": password,
+            },
+        )
     except Exception as exc:
         _metric_inc("ztam_auth_failures_total", type="keycloak_unreachable", flow="proxy")
         _log_event(logging.ERROR, "login_proxy_keycloak_unreachable", request=request, client_ip=client_ip, error=str(exc))
+        _audit_event("login_failure", request, user_id=username, reason="keycloak_unreachable")
         return Response(content='{"error":"auth service unavailable"}',
                         status_code=503, media_type="application/json")
 
     if kc_resp.status_code != 200:
         _metric_inc("ztam_auth_login_attempts_total", flow="proxy", outcome="failed")
         _log_event(logging.WARNING, "login_proxy_failed", request=request, username=username, client_ip=client_ip, status_code=kc_resp.status_code)
+        _audit_event("login_failure", request, user_id=username, reason="invalid_credentials")
         return Response(content='{"error":"Invalid credentials."}',
                         status_code=401, media_type="application/json")
 
@@ -763,6 +991,7 @@ async def login_proxy(request: Request):
 
     _metric_inc("ztam_auth_login_attempts_total", flow="proxy", outcome="succeeded")
     _log_event(logging.INFO, "login_proxy_succeeded", request=request, username=uname, role=role)
+    _audit_event("login_success", request, user_id=str(claims.get("sub", uname)), reason="proxy_login")
 
     # ── 3. Return RS256 Keycloak token to the browser ─────────────────────────
     # The browser stores this and sends it on every subsequent API request.
@@ -782,12 +1011,7 @@ async def logout(request: Request) -> Response:
     is invalidated even before it expires.
     Called by Envoy for POST /api/auth/logout.
     """
-    auth_header: str = request.headers.get("authorization", "")
-    token: Optional[str] = None
-    if auth_header.lower().startswith("bearer "):
-        token = auth_header[7:]
-    else:
-        token = request.cookies.get(AUTH_COOKIE_NAME)
+    token = _extract_token(request)
 
     host_header: str = request.headers.get("host", "")
     tenant_config = get_tenant_config(host_header)
@@ -807,23 +1031,35 @@ async def logout(request: Request) -> Response:
     response.delete_cookie(key=AUTH_ID_COOKIE_NAME, path="/")
     if not token:
         _log_event(logging.INFO, "logout_without_token", request=request)
+        _audit_event("logout", request, reason="no_token")
         return response
     try:
+        unverified = jwt.get_unverified_claims(token)
+        exp = int(unverified.get("exp", 0))
+        now = int(time.time())
+        ttl = max(0, exp - now)
+        token_jti = str(unverified.get("jti") or hashlib.sha256(token.encode("utf-8")).hexdigest())
+        if ttl > 0:
+            await _redis_setex_with_retries(f"ztam:blacklist:{token_jti}", ttl, "1")
         realm = (tenant_config or {}).get("keycloak_realm", KC_REALM)
         client_id = (tenant_config or {}).get("keycloak_client_id", KC_CLIENT_ID)
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            await client.post(
-                f"{KEYCLOAK_URL}/realms/{realm}/protocol/openid-connect/logout",
-                data={
-                    "client_id":      client_id,
-                    "client_secret":  KC_CLIENT_SECRET,
-                    "token_type_hint": "access_token",
-                    "token":          token,
-                },
-            )
+        await _request_with_retries(
+            "POST",
+            f"{KEYCLOAK_URL}/realms/{realm}/protocol/openid-connect/logout",
+            request=request,
+            timeout=HTTP_TIMEOUT_SECONDS,
+            data={
+                "client_id": client_id,
+                "client_secret": KC_CLIENT_SECRET,
+                "token_type_hint": "access_token",
+                "token": token,
+            },
+        )
         _log_event(logging.INFO, "logout_succeeded", request=request)
+        _audit_event("logout", request, user_id=str(unverified.get("sub", "")), tenant_id=str((tenant_config or {}).get("name", "")), reason="logout_succeeded")
     except Exception as exc:
         _log_event(logging.WARNING, "logout_keycloak_unreachable", request=request, error=str(exc))
+        _audit_event("logout", request, reason="logout_partial_failure")
     return response
 
 
@@ -923,56 +1159,63 @@ async def auth_callback(request: Request, code: str, state: str = "/", tenant: s
     callback_url = build_callback_url(request, tenant_config.get("name", tenant))
 
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            token_request = {
-                "grant_type": "authorization_code",
-                "client_id": client_id,
-                "code": code,
-                "redirect_uri": callback_url,
-            }
-            if client_secret:
-                token_request["client_secret"] = client_secret
+        token_request = {
+            "grant_type": "authorization_code",
+            "client_id": client_id,
+            "code": code,
+            "redirect_uri": callback_url,
+        }
+        if client_secret:
+            token_request["client_secret"] = client_secret
+        resp = await _request_with_retries(
+            "POST",
+            token_uri,
+            request=request,
+            timeout=HTTP_TIMEOUT_SECONDS,
+            data=token_request,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        access_token = data["access_token"]
+        id_token = data.get("id_token", "")
 
-            resp = await client.post(
-                token_uri,
-                data=token_request,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            access_token = data["access_token"]
-            id_token = data.get("id_token", "")
+        # Redirect back to the original page (stored in state)
+        response = Response(status_code=302, headers={"Location": state})
 
-            # Redirect back to the original page (stored in state)
-            response = Response(status_code=302, headers={"Location": state})
-            
-            # Set secure HttpOnly cookie
+        # Set secure HttpOnly cookie
+        response.set_cookie(
+            key=AUTH_COOKIE_NAME,
+            value=access_token,
+            httponly=True,
+            secure=AUTH_COOKIE_SECURE,
+            samesite=AUTH_COOKIE_SAMESITE,
+            max_age=data.get("expires_in", 3600),
+        )
+        if id_token:
             response.set_cookie(
-                key=AUTH_COOKIE_NAME,
-                value=access_token,
+                key=AUTH_ID_COOKIE_NAME,
+                value=id_token,
                 httponly=True,
                 secure=AUTH_COOKIE_SECURE,
                 samesite=AUTH_COOKIE_SAMESITE,
                 max_age=data.get("expires_in", 3600),
+                path="/",
             )
-            if id_token:
-                response.set_cookie(
-                    key=AUTH_ID_COOKIE_NAME,
-                    value=id_token,
-                    httponly=True,
-                    secure=AUTH_COOKIE_SECURE,
-                    samesite=AUTH_COOKIE_SAMESITE,
-                    max_age=data.get("expires_in", 3600),
-                    path="/",
-                )
-            _metric_inc("ztam_auth_login_attempts_total", flow="callback", outcome="succeeded")
-            _log_event(
-                logging.INFO,
-                "auth_callback_succeeded",
-                request=request,
-                tenant_id=tenant_config.get("name", tenant),
-                client_id=client_id,
-            )
-            return response
+        _metric_inc("ztam_auth_login_attempts_total", flow="callback", outcome="succeeded")
+        _log_event(
+            logging.INFO,
+            "auth_callback_succeeded",
+            request=request,
+            tenant_id=tenant_config.get("name", tenant),
+            client_id=client_id,
+        )
+        _audit_event(
+            "login_success",
+            request,
+            tenant_id=str(tenant_config.get("name", tenant)),
+            reason="callback",
+        )
+        return response
     except Exception as exc:
         _log_event(
             logging.ERROR,
@@ -983,6 +1226,7 @@ async def auth_callback(request: Request, code: str, state: str = "/", tenant: s
             error=str(exc),
         )
         _metric_inc("ztam_auth_failures_total", type="callback_failed", tenant_id=tenant_config.get("name", tenant) or "unknown")
+        _audit_event("login_failure", request, tenant_id=str(tenant_config.get("name", tenant)), reason="callback_failed")
         return Response(content='{"error":"authentication failed"}',
                         status_code=500, media_type="application/json")
 
@@ -1003,9 +1247,7 @@ async def check(request: Request, full_path: str = ""):
         return Response(status_code=200)
 
     # ---------- 1. Determine original path early (needed for login redirect) -
-    original_path: str = "/" + full_path if full_path else "/"
-    if request.url.query:
-        original_path += "?" + request.url.query
+    original_path: str = _normalize_path("/" + full_path if full_path else "/", request.url.query)
 
     if original_path == "/health":
         return Response(content='{"status":"ok"}', media_type="application/json")
@@ -1016,15 +1258,8 @@ async def check(request: Request, full_path: str = ""):
             headers={"Content-Type": "text/plain; version=0.0.4; charset=utf-8"},
         )
 
-    # ---------- 2. Extract Bearer token (Header or Cookie) ------------------
-    auth_header: str = request.headers.get("authorization", "")
-    token: Optional[str] = None
-
-    if auth_header.lower().startswith("bearer "):
-        token = auth_header[7:]
-    else:
-        # Fallback to cookie — primary method for browser-based tenants
-        token = request.cookies.get(AUTH_COOKIE_NAME)
+    # ---------- 2. Extract Bearer token (Header first, Cookie fallback) -----
+    token = _extract_token(request)
 
     host_header: str = request.headers.get("host", "")
     host_clean: str = host_header.split(":")[0]
@@ -1041,9 +1276,11 @@ async def check(request: Request, full_path: str = ""):
                 login_url = f"/ztam/login?{urlencode({'next': original_path})}"
             _metric_inc("ztam_auth_decisions_total", outcome="redirect_to_login", tenant_id=(tenant_config or {}).get("name", "unknown"))
             _log_event(logging.INFO, "auth_redirected_to_login", request=request, tenant_id=(tenant_config or {}).get("name", ""), redirect_to=login_url, path=original_path)
+            _audit_event("deny", request, tenant_id=str((tenant_config or {}).get("name", "")), reason="redirect_to_login")
             return Response(status_code=302, headers={"location": login_url})
         _metric_inc("ztam_auth_decisions_total", outcome="missing_token", tenant_id=(tenant_config or {}).get("name", "unknown"))
         _log_event(logging.WARNING, "auth_missing_token", request=request, tenant_id=(tenant_config or {}).get("name", ""), path=original_path)
+        _audit_event("deny", request, tenant_id=str((tenant_config or {}).get("name", "")), reason="missing_token")
         return Response(
             content='{"error":"missing token"}',
             status_code=401,
@@ -1076,9 +1313,28 @@ async def check(request: Request, full_path: str = ""):
     except JWTError as exc:
         _metric_inc("ztam_auth_failures_total", type="jwt_validation_failed")
         _log_event(logging.WARNING, "jwt_validation_failed", request=request, error=str(exc), path=original_path)
+        _audit_event("deny", request, reason="jwt_validation_failed")
         return Response(
             content='{"error":"invalid or expired token"}',
             status_code=403,
+            media_type="application/json",
+        )
+
+    try:
+        token_jti = str(claims.get("jti") or hashlib.sha256(token.encode("utf-8")).hexdigest())
+        blacklisted = await _redis_get_with_retries(f"ztam:blacklist:{token_jti}")
+        if blacklisted:
+            _audit_event("deny", request, user_id=str(claims.get("sub", "")), reason="token_revoked")
+            return Response(
+                content='{"error":"token revoked"}',
+                status_code=403,
+                media_type="application/json",
+            )
+    except Exception as exc:
+        _log_event(logging.ERROR, "redis_blacklist_check_failed", request=request, error=str(exc))
+        return Response(
+            content='{"error":"auth service unavailable"}',
+            status_code=503,
             media_type="application/json",
         )
 
@@ -1108,13 +1364,11 @@ async def check(request: Request, full_path: str = ""):
         if tenant_config
         else (host_clean.split(".")[0] if "." in host_clean else "")
     )
-    tenant_id: str = (
-        tenant_from_host
-        or claims.get("tenant_id")
-        or claims.get("azp")
-        or KC_REALM
+    tenant_id: str = _sanitize_tenant_id(
+        tenant_from_host or str(claims.get("tenant_id") or claims.get("azp") or ""),
+        KC_REALM,
     )
-    roles: list[str] = extract_roles(claims)
+    roles: list[str] = _sanitize_roles(extract_roles(claims))
 
     if not user_id:
         return Response(
@@ -1130,6 +1384,7 @@ async def check(request: Request, full_path: str = ""):
     original_method: str = request.method.upper()
 
     client_type = "browser" if "text/html" in request.headers.get("accept", "") else "api"
+    clean_path = _normalize_path("/" + full_path if full_path else "/")
     opa_input = {
         "input": {
             "tenant": {
@@ -1143,7 +1398,7 @@ async def check(request: Request, full_path: str = ""):
                 "roles": roles,
             },
             "request": {
-                "path": original_path,
+                "path": clean_path,
                 "method": original_method,
             },
             "client": {
@@ -1165,13 +1420,15 @@ async def check(request: Request, full_path: str = ""):
 
     # ---------- 8. Single OPA call — get allow + deny_reason together --------
     try:
-        async with httpx.AsyncClient(timeout=3.0) as client:
-            opa_resp = await client.post(
-                f"{OPA_URL}/v1/data/authz",
-                json=opa_input,
-            )
-            opa_resp.raise_for_status()
-            opa_result: dict = opa_resp.json().get("result", {})
+        opa_resp = await _request_with_retries(
+            "POST",
+            f"{OPA_URL}/v1/data/authz",
+            request=request,
+            timeout=OPA_TIMEOUT_SECONDS,
+            json=opa_input,
+        )
+        opa_resp.raise_for_status()
+        opa_result: dict = opa_resp.json().get("result", {})
     except Exception as exc:
         _metric_inc("ztam_auth_failures_total", type="opa_call_failed", tenant_id=tenant_id)
         _log_event(logging.ERROR, "opa_call_failed", request=request, tenant_id=tenant_id, path=original_path, error=str(exc))
@@ -1191,13 +1448,22 @@ async def check(request: Request, full_path: str = ""):
         primary_role: str = custom_role if custom_role else (roles[0] if roles else "viewer")
 
         extra_headers: dict = {}
-        adapter_mode = (tenant_config or {}).get("adapter_mode", "translated_token" if TESTAPP_JWT_SECRET else "headers")
+        adapter_mode = str((tenant_config or {}).get("adapter_mode", "headers")).strip() or "headers"
         if adapter_mode == "translated_token" and TESTAPP_JWT_SECRET:
             now_ts = int(time.time())
-            db_user_id = claims.get("db_user_id") or user_id
+            db_user_id = claims.get("db_user_id")
+            try:
+                db_user_id_int = int(str(db_user_id))
+            except Exception:
+                _audit_event("deny", request, user_id=user_id, tenant_id=tenant_id, reason="invalid_db_user_id_for_translation")
+                return Response(
+                    content='{"error":"invalid token: missing numeric db_user_id"}',
+                    status_code=403,
+                    media_type="application/json",
+                )
             downstream_token = jwt.encode(
                 {
-                    "sub":      db_user_id,
+                    "sub":      db_user_id_int,
                     "username": username,
                     "role":     primary_role,
                     "iat":      now_ts,
@@ -1218,14 +1484,17 @@ async def check(request: Request, full_path: str = ""):
                 path=original_path,
             )
         _metric_inc("ztam_auth_decisions_total", outcome="allowed", tenant_id=tenant_id)
+        _audit_event("allow", request, user_id=user_id, tenant_id=tenant_id, reason="policy_allow")
 
         # Build downstream roles list.
         # Prefer the SPI-assigned custom_role (authoritative application role).
         # Fall back to the filtered realm/client roles for non-SPI tenants.
         if custom_role:
-            clean_roles = [primary_role]
+            clean_roles = _sanitize_roles([primary_role])
         else:
-            clean_roles = [r for r in roles if r not in _KC_INTERNAL_ROLES]
+            clean_roles = _sanitize_roles([r for r in roles if r not in _KC_INTERNAL_ROLES])
+        if not clean_roles:
+            clean_roles = ["viewer"]
         return Response(
             status_code=200,
             headers={
@@ -1250,6 +1519,7 @@ async def check(request: Request, full_path: str = ""):
         reason=deny_reason,
     )
     _metric_inc("ztam_auth_decisions_total", outcome="denied", tenant_id=tenant_id)
+    _audit_event("deny", request, user_id=user_id, tenant_id=tenant_id, reason=deny_reason)
     # Return a user-friendly HTML page for browser requests
     accept: str = request.headers.get("accept", "")
     if "text/html" in accept:

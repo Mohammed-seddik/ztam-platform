@@ -75,7 +75,7 @@ Browser ─ HTTP  :80  ───►│  │  TLS termination  │◄────
 Called by Envoy for `POST /api/auth/login`. Does NOT validate a token — it IS the login.
 
 ```
-Request body: { "username": "alice", "password": "secret123" }
+Request body: { "username": "alice", "password": "$DEMO_ALICE_PASSWORD" }
 
 0. Reject if IP has exceeded 10 attempts in 60 s  → 429
 1. Reject if username > 200 chars or password > 1000 chars  → 400
@@ -116,7 +116,7 @@ Called by Envoy for every other request. Validates the incoming token and decide
 **Configuration for this demo:**
 
 - Realm: `test-tenant`
-- Client: `test-app` (confidential, client-secret: `test-app-secret-2024`)
+- Client: `test-app` (confidential, client-secret from `KC_CLIENT_SECRET`)
 - User Federation: MySQL DB Provider (the custom Java SPI)
 - Protocol Mappers:
   - `role` attribute → JWT claim `role`
@@ -317,7 +317,7 @@ Browser     Envoy        Auth Middleware       OPA
 
 ## Token Translation Detail
 
-TestApp was written expecting **HS256** tokens signed with `JWT_SECRET=super_secret_jwt_key_for_ztam_demo_2024`.
+TestApp was written expecting **HS256** tokens signed with `JWT_SECRET` from environment.
 
 Keycloak issues **RS256** tokens signed with its own RSA key pair.
 

@@ -8,7 +8,7 @@
 #     --name      myapp                           \   # Keycloak client ID + OPA key
 #     --backend   https://myapp.railway.app       \   # backend URL (any host)
 #     --hostname  myapp.yourdomain.com            \   # hostname clients will hit
-#     --roles     "admin,manager,user,viewer"         # comma-separated role list
+#     --roles     "admin,editor,user,viewer"          # comma-separated role list
 #
 # What it does:
 #   1. Creates Keycloak client + roles via Admin REST API
@@ -26,7 +26,7 @@ ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 TENANT_NAME=""
 BACKEND_URL=""
 HOSTNAME_FQDN=""
-ROLES="admin,user,viewer"
+ROLES="admin,editor,user,viewer"
 LOGIN_MODE="form"
 NO_SPI="false"
 

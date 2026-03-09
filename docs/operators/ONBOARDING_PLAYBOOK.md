@@ -11,7 +11,7 @@ Before touching the platform, collect these five items from the customer:
 - Backend URL: where the app currently runs.
 - Public hostname: what hostname you will protect, for example `app.customer.com`.
 - Login mode: `form` if the app already has a login page, `keycloak` if ZTAM should host the login experience.
-- Roles: the business roles they actually use, for example `admin`, `manager`, `viewer`.
+- Roles: the business roles they actually use, normalized to `admin`, `editor`, `user`, `viewer`.
 - Test accounts: at least one admin user and one limited user for smoke testing.
 
 If the customer wants to reuse their existing users database, collect these extra items before promising same-day onboarding:
@@ -69,7 +69,7 @@ python3 scripts/tenant_manager.py assess \
   --backend-url https://app.acmecorp.com \
   --name acmecorp \
   --hostname acmecorp.yourdomain.com \
-  --roles "admin,owner,accountant,employee,auditor" \
+  --roles "admin,editor,user,viewer" \
   --write-config
 ```
 
@@ -92,7 +92,7 @@ If you already used `assess --write-config`, this step handles Keycloak registra
   --name acmecorp \
   --backend https://app.acmecorp.com \
   --hostname acmecorp.yourdomain.com \
-  --roles "admin,owner,accountant,employee,auditor"
+  --roles "admin,editor,user,viewer"
 ```
 
 ### Step B: Review the generated tenant definition

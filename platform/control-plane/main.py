@@ -353,7 +353,7 @@ class TenantUpsert(BaseModel):
     keycloak_realm: str = "test-tenant"
     keycloak_client_id: str
     secret_refs: dict[str, str] = Field(default_factory=dict)
-    role_catalog: list[str] = Field(default_factory=lambda: ["admin", "user"])
+    role_catalog: list[str] = Field(default_factory=lambda: ["admin", "editor", "user", "viewer"])
     policy_definition: dict[str, Any] | None = None
     adapter_mode: Literal["headers", "translated_token"] = "headers"
     client_change_summary: list[str] = Field(default_factory=list)
@@ -376,7 +376,7 @@ class PublishStatusResponse(BaseModel):
 
 def legacy_tenant_to_record(raw: dict[str, Any]) -> dict[str, Any]:
     integration_mode = "managed_oidc" if raw.get("login_mode", "keycloak") == "keycloak" else "form_bridge"
-    adapter_mode = "translated_token" if raw.get("name") == "testapp" else "headers"
+    adapter_mode = raw.get("adapter_mode", "headers")
     now = raw.get("created_at") or utc_now()
     policy_definition = normalize_permissions(raw.get("permissions"), parse_roles(raw.get("roles", [])))
     return {

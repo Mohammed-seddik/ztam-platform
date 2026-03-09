@@ -75,7 +75,7 @@ def main() -> int:
                 continue
 
             integration_mode = "managed_oidc" if normalized["login_mode"] == "keycloak" else "form_bridge"
-            adapter_mode = "translated_token" if tenant_id == "testapp" else "headers"
+            adapter_mode = normalized.get("adapter_mode", "headers")
             now = normalized["created_at"] or utc_now()
             payload = {
                 "tenant_id": tenant_id,

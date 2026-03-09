@@ -1,5 +1,16 @@
 services:
 
+  redis:
+    image: redis:7.2-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    networks: [ztam]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+
   postgres:
     image: postgres:16
     environment:
@@ -78,6 +89,13 @@ services:
       KC_CLIENT_SECRET: ${KC_CLIENT_SECRET}
       OPA_URL: http://opa:8181
       TESTAPP_JWT_SECRET: ${TESTAPP_JWT_SECRET}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      ENVOY_AUTH_SHARED_SECRET: ${ENVOY_AUTH_SHARED_SECRET}
+      HTTP_TIMEOUT_SECONDS: ${HTTP_TIMEOUT_SECONDS:-5}
+      OPA_TIMEOUT_SECONDS: ${OPA_TIMEOUT_SECONDS:-2}
+      HTTP_RETRY_ATTEMPTS: ${HTTP_RETRY_ATTEMPTS:-4}
+      REDIS_RETRY_ATTEMPTS: ${REDIS_RETRY_ATTEMPTS:-4}
+      JWKS_TTL_SECONDS: ${JWKS_TTL_SECONDS:-300}
       TENANTS_DIR: /app/tenants
       AUTH_METADATA_FILE: /app/platform/published/auth/tenants.json
     # No external port: only Envoy calls auth-middleware via ext_authz on the internal network.
@@ -94,6 +112,8 @@ services:
       keycloak:
         condition: service_healthy
       opa:
+        condition: service_healthy
+      redis:
         condition: service_healthy
 
   control-plane:
@@ -130,11 +150,21 @@ services:
     ports:
       - "80:8080"       # HTTP  → redirects to HTTPS
       - "443:8443"      # HTTPS → all traffic, TLS terminated here
+    environment:
+      ENVOY_AUTH_SHARED_SECRET: ${ENVOY_AUTH_SHARED_SECRET}
     networks: [ztam]
     restart: unless-stopped
     depends_on:
       auth-middleware:
         condition: service_healthy
+      testapp:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/9901' 2>/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
 
   testapp-db:
     image: mysql:8
@@ -194,6 +224,13 @@ services:
     depends_on:
       auth-middleware:
         condition: service_healthy
+      envoy:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO /dev/null http://localhost:9090/-/healthy || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
 
   grafana:
     image: grafana/grafana:11.1.4
@@ -212,7 +249,12 @@ services:
     profiles: [observability]
     depends_on:
       prometheus:
-        condition: service_started
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO /dev/null http://localhost:3000/api/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
 
 networks:
   ztam:

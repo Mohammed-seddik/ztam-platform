@@ -13,5 +13,9 @@ RUN npm install --omit=dev
 # Copy remaining backend source
 COPY backend/ .
 
+RUN addgroup -S appuser && adduser -S -G appuser appuser \
+    && chown -R appuser:appuser /app
+USER appuser
+
 EXPOSE 3000
 CMD ["node", "server.js"]

@@ -12,6 +12,7 @@
     "viewer"
   ],
   "login_mode": "keycloak",
+  "adapter_mode": "translated_token",
   "no_spi": false,
   "permissions": {
     "editor": {

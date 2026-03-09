@@ -88,6 +88,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--password")
     parser.add_argument("--expect-text")
     parser.add_argument("--expect-status", type=int, default=200)
+    parser.add_argument("--denied-path", default="/admin")
+    parser.add_argument("--deny-expected-status", type=int, default=403)
     parser.add_argument("--timeout", type=int, default=20)
     parser.add_argument("--insecure", action="store_true")
     return parser.parse_args()
@@ -176,6 +178,19 @@ def main() -> int:
     if args.expect_text:
         ensure(args.expect_text in page.body, f"expected protected page to contain: {args.expect_text}")
     print(f"Protected page verified with HTTP {page.status}")
+
+    denied_url = join_url(args.base_url, args.denied_path)
+    denied = fetch(
+        opener,
+        denied_url,
+        headers={"Accept": "application/json", **({"Host": args.host_header} if args.host_header else {})},
+        timeout=max(args.timeout, 40),
+    )
+    ensure(
+        denied.status == args.deny_expected_status,
+        f"expected HTTP {args.deny_expected_status} on denied route, got HTTP {denied.status}",
+    )
+    print(f"Role denial verified on {args.denied_path} with HTTP {denied.status}")
     return 0
 
 

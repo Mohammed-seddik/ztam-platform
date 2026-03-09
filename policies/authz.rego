@@ -1,10 +1,10 @@
 package authz
 
-import future.keywords.if
-import future.keywords.in
-
 default allow := false
 default deny_reason := "access denied by default policy"
+
+import future.keywords.if
+import future.keywords.in
 
 subject := object.get(input, "subject", object.get(input, "user", {}))
 tenant := object.get(input, "tenant", {"id": object.get(subject, "tenant_id", object.get(object.get(input, "user", {}), "tenant_id", ""))})

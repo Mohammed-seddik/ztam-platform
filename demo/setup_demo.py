@@ -18,6 +18,7 @@ Steps:
   10. Print summary
 """
 import json, base64, os, sys, urllib.request, urllib.parse
+import time
 from pathlib import Path
 
 # ── CLI flags ─────────────────────────────────────────────────────────────────
@@ -46,12 +47,15 @@ MYSQL_PORT       = os.environ.get("DB_PORT",         "3306")
 MYSQL_DB         = os.environ.get("MYSQL_DATABASE",  "taskapp")
 MYSQL_USER       = os.environ.get("MYSQL_USER",      "")
 MYSQL_PASS       = os.environ.get("MYSQL_PASSWORD",  "")
+DEMO_ALICE_PASSWORD = os.environ.get("DEMO_ALICE_PASSWORD", "")
+DEMO_CHARLIE_PASSWORD = os.environ.get("DEMO_CHARLIE_PASSWORD", "")
 
 for _var, _val in (
     ("KC_ADMIN_PASS",    KC_ADMIN_PASS),
     ("KC_CLIENT_SECRET", KC_CLIENT_SECRET),
     ("MYSQL_USER",       MYSQL_USER),
     ("MYSQL_PASSWORD",   MYSQL_PASS),
+    ("DEMO_ALICE_PASSWORD", DEMO_ALICE_PASSWORD),
 ):
     if not _val:
         print(f"ERROR: required variable {_var!r} is not set in .env")
@@ -85,7 +89,26 @@ def step(n, msg):
     print(f"\n[{n}] {msg}")
 
 
+def wait_for_keycloak_ready(max_attempts: int = 30) -> None:
+    token_path = "/realms/master/protocol/openid-connect/token"
+    for attempt in range(max_attempts):
+        try:
+            req = urllib.request.Request(KC + token_path, data=b"", method="POST")
+            urllib.request.urlopen(req, timeout=3)
+        except urllib.error.HTTPError as exc:
+            if exc.code in {400, 401}:
+                return
+        except Exception:
+            pass
+        sleep_seconds = min(5, 1 + attempt // 5)
+        print(f"   Waiting for Keycloak to become ready... ({attempt + 1}/{max_attempts})")
+        time.sleep(sleep_seconds)
+    print("   ERROR: Keycloak did not become ready in time")
+    sys.exit(1)
+
+
 # ── 1. Admin token ─────────────────────────────────────────────────────────────
+wait_for_keycloak_ready()
 step(1, "Authenticating with Keycloak admin...")
 code, d = kc("POST", "/realms/master/protocol/openid-connect/token", {
     "client_id": "admin-cli", "grant_type": "password",
@@ -107,7 +130,7 @@ code, _ = kc("POST", "/admin/realms", {
     "displayName": "ZTAM Demo",
     "registrationAllowed": False,
     "loginTheme": "keycloak",
-    "accessTokenLifespan": 3600,
+    "accessTokenLifespan": 900,
     "ssoSessionMaxLifespan": 36000,
 }, token=ADMIN)
 if code == 201:
@@ -378,7 +401,7 @@ code, resp = kc("POST", f"/realms/{REALM}/protocol/openid-connect/token", {
     "client_id":  KC_CLIENT_ID,
     "client_secret": KC_CLIENT_SECRET,
     "username": "alice",
-    "password": "secret123",
+    "password": DEMO_ALICE_PASSWORD,
 }, form=True)
 
 if "access_token" in resp:
@@ -418,10 +441,10 @@ print(f"  MFA              : {'TOTP required on first login' if ENABLE_MFA else 
 print(f"  Admin console    : http://localhost:8080")
 print()
 print("  Test users (in testapp-db):")
-print("    alice      / secret123 → admin")
-print("    charlie    / pass123   → user")
-print("    testuser   / test123   → user")
-print("    demouser   / demo123   → admin")
+print("    alice      / $DEMO_ALICE_PASSWORD   → admin")
+print("    charlie    / $DEMO_CHARLIE_PASSWORD → user")
+print("    testuser   / (set in app DB)        → user")
+print("    demouser   / (set in app DB)        → admin")
 print()
 print("  Open the app:  https://localhost")
 print("═" * 60)
