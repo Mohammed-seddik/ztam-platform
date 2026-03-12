@@ -32,6 +32,9 @@ ROLE_WHITELIST = {"admin", "editor", "user", "viewer"}
 TENANT_NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{1,63}$")
 HOSTNAME_RE = re.compile(r"^(?=.{1,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$")
 ADAPTER_MODE_WHITELIST = {"headers", "translated_token"}
+DB_TYPE_WHITELIST = {"mysql", "postgresql"}
+HASH_ALGORITHM_WHITELIST = {"bcrypt"}
+IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
 
 SECURITY_HEADERS_LINES = [
     "                      response_headers_to_add:",
@@ -115,6 +118,103 @@ def _validate_string_list(value: Any, field_name: str) -> list[str]:
     return value
 
 
+def _normalize_simple_string(value: Any, field_name: str, *, required: bool = False) -> str:
+    text = str(value or "").strip()
+    if required and not text:
+        raise ValueError(f"{field_name} is required")
+    return text
+
+
+def _normalize_url_list(value: Any, field_name: str) -> list[str]:
+    if value in (None, ""):
+        return []
+    if not isinstance(value, list):
+        raise ValueError(f"{field_name} must be a list of URL strings")
+    urls: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            raise ValueError(f"{field_name} entries must be strings")
+        candidate = item.strip()
+        if not candidate:
+            continue
+        parsed = urlparse(candidate)
+        if parsed.scheme != "https":
+            raise ValueError(f"{field_name} entries must start with https://")
+        if not parsed.hostname:
+            raise ValueError(f"{field_name} entries must include a host")
+        if ".." in parsed.path or ".." in parsed.netloc:
+            raise ValueError(f"{field_name} entries must not contain traversal sequences")
+        urls.append(candidate)
+    return list(dict.fromkeys(urls))
+
+
+def _default_redirect_uris(hostname: str) -> list[str]:
+    return [f"https://{hostname}/*"]
+
+
+def _default_web_origins(hostname: str) -> list[str]:
+    return [f"https://{hostname}"]
+
+
+def normalize_db_credentials(raw_db: Any) -> dict[str, str]:
+    if raw_db in (None, "", {}):
+        return {}
+    if not isinstance(raw_db, dict):
+        raise ValueError("db_credentials must be an object")
+
+    db_type = _normalize_simple_string(raw_db.get("db_type", "mysql"), "db_credentials.db_type", required=True).lower()
+    if db_type not in DB_TYPE_WHITELIST:
+        raise ValueError("db_credentials.db_type must be one of: mysql, postgresql")
+
+    db_host = _normalize_simple_string(raw_db.get("db_host", ""), "db_credentials.db_host", required=True)
+    if "/" in db_host or ".." in db_host:
+        raise ValueError("db_credentials.db_host must not contain path or traversal sequences")
+
+    db_port_raw = _normalize_simple_string(raw_db.get("db_port", "3306" if db_type == "mysql" else "5432"), "db_credentials.db_port", required=True)
+    if not db_port_raw.isdigit():
+        raise ValueError("db_credentials.db_port must be numeric")
+    db_port = str(int(db_port_raw))
+    if not (1 <= int(db_port) <= 65535):
+        raise ValueError("db_credentials.db_port must be between 1 and 65535")
+
+    db_name = _normalize_simple_string(raw_db.get("db_name", ""), "db_credentials.db_name", required=True)
+    db_user = _normalize_simple_string(raw_db.get("db_user", ""), "db_credentials.db_user", required=True)
+    db_password = _normalize_simple_string(raw_db.get("db_password", ""), "db_credentials.db_password", required=True)
+    table_name = _normalize_simple_string(raw_db.get("table_name", "users"), "db_credentials.table_name", required=True)
+    username_col = _normalize_simple_string(raw_db.get("username_col", "username"), "db_credentials.username_col", required=True)
+    password_col = _normalize_simple_string(raw_db.get("password_col", "password_hash"), "db_credentials.password_col", required=True)
+    role_col = _normalize_simple_string(raw_db.get("role_col", "role"), "db_credentials.role_col", required=True)
+    hash_algorithm = _normalize_simple_string(raw_db.get("hash_algorithm", "bcrypt"), "db_credentials.hash_algorithm", required=True).lower()
+
+    if hash_algorithm not in HASH_ALGORITHM_WHITELIST:
+        raise ValueError("db_credentials.hash_algorithm must be 'bcrypt'")
+
+    for field_name, candidate in (
+        ("db_credentials.db_name", db_name),
+        ("db_credentials.db_user", db_user),
+        ("db_credentials.table_name", table_name),
+        ("db_credentials.username_col", username_col),
+        ("db_credentials.password_col", password_col),
+        ("db_credentials.role_col", role_col),
+    ):
+        if not IDENTIFIER_RE.match(candidate):
+            raise ValueError(f"{field_name} contains unsupported characters")
+
+    return {
+        "db_type": db_type,
+        "db_host": db_host,
+        "db_port": db_port,
+        "db_name": db_name,
+        "db_user": db_user,
+        "db_password": db_password,
+        "table_name": table_name,
+        "username_col": username_col,
+        "password_col": password_col,
+        "role_col": role_col,
+        "hash_algorithm": hash_algorithm,
+    }
+
+
 def normalize_permissions(raw_permissions: Any, roles: list[str]) -> dict[str, dict[str, list[str]]]:
     if raw_permissions is None:
         permissions: dict[str, dict[str, list[str]]] = {}
@@ -195,6 +295,18 @@ def normalize_tenant_config(raw_config: dict[str, Any], source: Path) -> dict[st
     adapter_mode = str(raw_config.get("adapter_mode", "headers")).strip() or "headers"
     if adapter_mode not in ADAPTER_MODE_WHITELIST:
         raise ValueError("adapter_mode must be one of: headers, translated_token")
+    login_mode = str(raw_config.get("login_mode", "form")).strip() or "form"
+    if login_mode not in {"form", "keycloak"}:
+        raise ValueError("login_mode must be one of: form, keycloak")
+
+    redirect_uris = _normalize_url_list(raw_config.get("redirect_uris"), "redirect_uris")
+    web_origins = _normalize_url_list(raw_config.get("web_origins"), "web_origins")
+    if not redirect_uris:
+        redirect_uris = _default_redirect_uris(hostname)
+    if not web_origins:
+        web_origins = _default_web_origins(hostname)
+
+    db_credentials = normalize_db_credentials(raw_config.get("db_credentials"))
 
     return {
         "name": name,
@@ -206,10 +318,15 @@ def normalize_tenant_config(raw_config: dict[str, Any], source: Path) -> dict[st
         "hostname": hostname,
         "keycloak_client_id": str(raw_config.get("keycloak_client_id", name)).strip() or name,
         "keycloak_realm": str(raw_config.get("keycloak_realm", "test-tenant")).strip() or "test-tenant",
+        "keycloak_client_secret": str(raw_config.get("keycloak_client_secret", "")).strip(),
         "roles": roles,
-        "login_mode": str(raw_config.get("login_mode", "form")).strip() or "form",
+        "login_mode": login_mode,
         "adapter_mode": adapter_mode,
+        "downstream_jwt_secret": str(raw_config.get("downstream_jwt_secret", "")).strip(),
+        "redirect_uris": redirect_uris,
+        "web_origins": web_origins,
         "no_spi": bool(raw_config.get("no_spi", False)),
+        "db_credentials": db_credentials,
         "permissions": permissions,
         "created_at": str(raw_config.get("created_at", utc_now())).strip() or utc_now(),
         "notes": str(raw_config.get("notes", "")).strip(),
@@ -554,6 +671,31 @@ def cmd_sync_policies(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_sync_auth(args: argparse.Namespace) -> int:
+    tenants = load_tenants(Path(args.tenants_dir))
+    payload = {
+        "version": "v1",
+        "generated_at": utc_now(),
+        "tenants": [
+            {
+                "tenant_id": tenant["name"],
+                "display_name": tenant["display_name"],
+                "primary_hostname": tenant["hostname"],
+                "integration_mode": "managed_oidc" if tenant["login_mode"] == "keycloak" else "form_bridge",
+                "identity_mode": "federated_db" if tenant["db_credentials"] and not tenant["no_spi"] else "managed",
+                "adapter_mode": tenant["adapter_mode"],
+                "keycloak_realm": tenant["keycloak_realm"],
+                "keycloak_client_id": tenant["keycloak_client_id"],
+                "status": "published",
+            }
+            for tenant in tenants
+        ],
+    }
+    write_json(Path(args.output), payload)
+    print(f"Wrote {len(tenants)} auth metadata entr{'y' if len(tenants) == 1 else 'ies'} to {args.output}")
+    return 0
+
+
 def cmd_sync_envoy(args: argparse.Namespace) -> int:
     tenants = load_tenants(Path(args.tenants_dir))
     envoy_path = Path(args.envoy_yaml)
@@ -581,6 +723,23 @@ def cmd_upsert(args: argparse.Namespace) -> int:
             existing = json.load(handle)
 
     raw_config: dict[str, Any] = dict(existing)
+    db_credentials = dict(existing.get("db_credentials") or {})
+    for field in (
+        "db_type",
+        "db_host",
+        "db_port",
+        "db_name",
+        "db_user",
+        "db_password",
+        "table_name",
+        "username_col",
+        "password_col",
+        "role_col",
+        "hash_algorithm",
+    ):
+        value = getattr(args, field, None)
+        if value:
+            db_credentials[field] = value
     raw_config.update(
         {
             "name": args.name,
@@ -589,9 +748,15 @@ def cmd_upsert(args: argparse.Namespace) -> int:
             "hostname": args.hostname,
             "keycloak_client_id": args.keycloak_client_id or existing.get("keycloak_client_id") or args.name,
             "keycloak_realm": args.keycloak_realm or existing.get("keycloak_realm") or "test-tenant",
+            "keycloak_client_secret": args.keycloak_client_secret if args.keycloak_client_secret is not None else existing.get("keycloak_client_secret", ""),
             "roles": parse_roles(args.roles),
             "login_mode": args.login_mode,
+            "adapter_mode": args.adapter_mode,
+            "downstream_jwt_secret": args.downstream_jwt_secret if args.downstream_jwt_secret is not None else existing.get("downstream_jwt_secret", ""),
+            "redirect_uris": args.redirect_uri or existing.get("redirect_uris") or [],
+            "web_origins": args.web_origin or existing.get("web_origins") or [],
             "no_spi": args.no_spi,
+            "db_credentials": db_credentials,
             "created_at": existing.get("created_at") or utc_now(),
             "notes": args.notes if args.notes is not None else existing.get("notes", ""),
         }
@@ -661,9 +826,32 @@ def cmd_assess(args: argparse.Namespace) -> int:
                 "hostname": args.hostname,
                 "keycloak_client_id": args.keycloak_client_id or existing.get("keycloak_client_id") or args.name,
                 "keycloak_realm": args.keycloak_realm or existing.get("keycloak_realm") or "test-tenant",
+                "keycloak_client_secret": args.keycloak_client_secret if args.keycloak_client_secret is not None else existing.get("keycloak_client_secret", ""),
                 "roles": roles,
                 "login_mode": args.login_mode if args.login_mode != "auto" else report["recommended_login_mode"],
+                "adapter_mode": args.adapter_mode,
+                "downstream_jwt_secret": args.downstream_jwt_secret if args.downstream_jwt_secret is not None else existing.get("downstream_jwt_secret", ""),
+                "redirect_uris": args.redirect_uri or existing.get("redirect_uris") or [],
+                "web_origins": args.web_origin or existing.get("web_origins") or [],
                 "no_spi": args.no_spi,
+                "db_credentials": {
+                    **(existing.get("db_credentials") or {}),
+                    **{
+                        key: value for key, value in {
+                            "db_type": args.db_type,
+                            "db_host": args.db_host,
+                            "db_port": args.db_port,
+                            "db_name": args.db_name,
+                            "db_user": args.db_user,
+                            "db_password": args.db_password,
+                            "table_name": args.table_name,
+                            "username_col": args.username_col,
+                            "password_col": args.password_col,
+                            "role_col": args.role_col,
+                            "hash_algorithm": args.hash_algorithm,
+                        }.items() if value
+                    },
+                },
                 "created_at": existing.get("created_at") or utc_now(),
                 "notes": args.notes if args.notes is not None else "Generated by tenant_manager assess",
             }
@@ -723,6 +911,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sync_parser.set_defaults(func=cmd_sync_policies)
 
+    auth_parser = subparsers.add_parser(
+        "sync-auth",
+        parents=[tenants_parent],
+        help="Generate platform/published/auth/tenants.json from tenant configs",
+    )
+    auth_parser.add_argument(
+        "--output",
+        default=str(Path(__file__).resolve().parents[1] / "platform" / "published" / "auth" / "tenants.json"),
+        help="Path to generated auth tenant metadata",
+    )
+    auth_parser.set_defaults(func=cmd_sync_auth)
+
     envoy_parser = subparsers.add_parser(
         "sync-envoy",
         parents=[tenants_parent],
@@ -743,8 +943,24 @@ def build_parser() -> argparse.ArgumentParser:
     upsert_parser.add_argument("--display-name")
     upsert_parser.add_argument("--keycloak-client-id")
     upsert_parser.add_argument("--keycloak-realm")
+    upsert_parser.add_argument("--keycloak-client-secret")
     upsert_parser.add_argument("--login-mode", default="form", choices=["form", "keycloak"])
+    upsert_parser.add_argument("--adapter-mode", default="headers", choices=["headers", "translated_token"])
+    upsert_parser.add_argument("--downstream-jwt-secret")
+    upsert_parser.add_argument("--redirect-uri", action="append")
+    upsert_parser.add_argument("--web-origin", action="append")
     upsert_parser.add_argument("--no-spi", action="store_true")
+    upsert_parser.add_argument("--db-type")
+    upsert_parser.add_argument("--db-host")
+    upsert_parser.add_argument("--db-port")
+    upsert_parser.add_argument("--db-name")
+    upsert_parser.add_argument("--db-user")
+    upsert_parser.add_argument("--db-password")
+    upsert_parser.add_argument("--table-name")
+    upsert_parser.add_argument("--username-col")
+    upsert_parser.add_argument("--password-col")
+    upsert_parser.add_argument("--role-col")
+    upsert_parser.add_argument("--hash-algorithm")
     upsert_parser.add_argument("--notes")
     upsert_parser.set_defaults(func=cmd_upsert)
 
@@ -765,8 +981,24 @@ def build_parser() -> argparse.ArgumentParser:
     assess_parser.add_argument("--display-name")
     assess_parser.add_argument("--keycloak-client-id")
     assess_parser.add_argument("--keycloak-realm")
+    assess_parser.add_argument("--keycloak-client-secret")
     assess_parser.add_argument("--login-mode", default="auto", choices=["auto", "form", "keycloak"])
+    assess_parser.add_argument("--adapter-mode", default="headers", choices=["headers", "translated_token"])
+    assess_parser.add_argument("--downstream-jwt-secret")
+    assess_parser.add_argument("--redirect-uri", action="append")
+    assess_parser.add_argument("--web-origin", action="append")
     assess_parser.add_argument("--no-spi", action="store_true")
+    assess_parser.add_argument("--db-type")
+    assess_parser.add_argument("--db-host")
+    assess_parser.add_argument("--db-port")
+    assess_parser.add_argument("--db-name")
+    assess_parser.add_argument("--db-user")
+    assess_parser.add_argument("--db-password")
+    assess_parser.add_argument("--table-name")
+    assess_parser.add_argument("--username-col")
+    assess_parser.add_argument("--password-col")
+    assess_parser.add_argument("--role-col")
+    assess_parser.add_argument("--hash-algorithm")
     assess_parser.add_argument("--notes")
     assess_parser.set_defaults(func=cmd_assess)
 

@@ -226,10 +226,6 @@ KC_ISSUER_URL: str = os.getenv("KC_ISSUER_URL", KEYCLOAK_URL)
 # Public URL used in redirects back to the browser (FQDN of the ZTAM gateway)
 ZTAM_PUBLIC_URL: str = os.getenv("ZTAM_PUBLIC_URL", "https://localhost")
 
-JWKS_URI: str = f"{KEYCLOAK_URL}/realms/{KC_REALM}/protocol/openid-connect/certs"
-KC_TOKEN_URI: str = f"{KEYCLOAK_URL}/realms/{KC_REALM}/protocol/openid-connect/token"
-EXPECTED_ISSUER: str = f"{KC_ISSUER_URL}/realms/{KC_REALM}"
-
 # Cookie settings
 AUTH_COOKIE_NAME = "ztam_auth"
 AUTH_ID_COOKIE_NAME = "ztam_id_token"
@@ -241,8 +237,8 @@ AUTH_METADATA_FILE = Path(
 )
 
 # ─── JWKS in-memory cache with asyncio lock (prevents thundering herd) ───────
-_jwks_cache: dict = {}
-_jwks_fetched_at: float = 0.0
+_jwks_cache: dict[str, dict] = {}
+_jwks_fetched_at: dict[str, float] = {}
 _jwks_lock = asyncio.Lock()
 _redis: Optional[Redis] = None
 
@@ -412,6 +408,7 @@ def _load_tenant_cache() -> tuple[dict[str, dict], dict[str, dict]]:
                         "status": str(item.get("status", "draft")).strip() or "draft",
                         "keycloak_client_id": str(item.get("keycloak_client_id", tenant_name)).strip() or tenant_name,
                         "keycloak_client_secret": "",
+                        "downstream_jwt_secret": "",
                         "keycloak_realm": str(item.get("keycloak_realm", KC_REALM)).strip() or KC_REALM,
                         "source": "published_bundle",
                     }
@@ -447,18 +444,17 @@ def _load_tenant_cache() -> tuple[dict[str, dict], dict[str, dict]]:
                     "integration_mode": "managed_oidc"
                     if str(raw_config.get("login_mode", "form")).strip() == "keycloak"
                     else "form_bridge",
-                    "identity_mode": "federated_db" if bool(raw_config.get("no_spi", False)) else "managed",
+                    "identity_mode": "managed" if bool(raw_config.get("no_spi", False)) else "federated_db",
                     "adapter_mode": str(raw_config.get("adapter_mode", "headers")).strip() or "headers",
                     "status": "published",
                     "keycloak_client_id": str(raw_config.get("keycloak_client_id", tenant_name)).strip() or tenant_name,
                     "keycloak_client_secret": str(raw_config.get("keycloak_client_secret", "")).strip(),
+                    "downstream_jwt_secret": str(raw_config.get("downstream_jwt_secret", "")).strip(),
                     "keycloak_realm": str(raw_config.get("keycloak_realm", KC_REALM)).strip() or KC_REALM,
                     "source": "legacy_config",
                 }
-                if tenant_name not in by_name:
-                    by_name[tenant_name] = tenant_config
-                if hostname.lower() not in by_host:
-                    by_host[hostname.lower()] = tenant_config
+                by_name[tenant_name] = tenant_config
+                by_host[hostname.lower()] = tenant_config
 
         _tenant_cache_by_name = by_name
         _tenant_cache_by_host = by_host
@@ -508,8 +504,8 @@ def build_keycloak_logout_url(
     next_url: str = "/",
     id_token_hint: str = "",
 ) -> str:
-    realm = (tenant_config or {}).get("keycloak_realm", KC_REALM)
-    client_id = (tenant_config or {}).get("keycloak_client_id", KC_CLIENT_ID)
+    realm = _tenant_realm(tenant_config)
+    client_id = _tenant_client_id(tenant_config)
     params = {
         "post_logout_redirect_uri": build_logged_out_url(request, next_url),
         "client_id": client_id,
@@ -520,6 +516,42 @@ def build_keycloak_logout_url(
         f"{KC_ISSUER_URL}/realms/{realm}/protocol/openid-connect/logout?"
         + urlencode(params)
     )
+
+
+def _tenant_realm(tenant_config: Optional[dict]) -> str:
+    return str((tenant_config or {}).get("keycloak_realm", KC_REALM)).strip() or KC_REALM
+
+
+def _tenant_client_id(tenant_config: Optional[dict]) -> str:
+    return str((tenant_config or {}).get("keycloak_client_id", KC_CLIENT_ID)).strip() or KC_CLIENT_ID
+
+
+def _tenant_client_secret(tenant_config: Optional[dict]) -> str:
+    return str((tenant_config or {}).get("keycloak_client_secret", KC_CLIENT_SECRET)).strip() or KC_CLIENT_SECRET
+
+
+def _tenant_downstream_jwt_secret(tenant_config: Optional[dict]) -> str:
+    return str((tenant_config or {}).get("downstream_jwt_secret", TESTAPP_JWT_SECRET or "")).strip()
+
+
+def _realm_token_uri(realm: str) -> str:
+    return f"{KEYCLOAK_URL}/realms/{realm}/protocol/openid-connect/token"
+
+
+def _realm_jwks_uri(realm: str) -> str:
+    return f"{KEYCLOAK_URL}/realms/{realm}/protocol/openid-connect/certs"
+
+
+def _realm_expected_issuer(realm: str) -> str:
+    return f"{KC_ISSUER_URL}/realms/{realm}"
+
+
+def _kc_internal_roles(realm: str) -> frozenset[str]:
+    return frozenset({
+        "offline_access",
+        "uma_authorization",
+        f"default-roles-{realm}",
+    })
 
 
 @app.on_event("startup")
@@ -543,14 +575,6 @@ async def _close_redis() -> None:
     if _redis is not None:
         await _redis.close()
         _redis = None
-
-
-# Keycloak internal roles that should never reach OPA or downstream headers
-_KC_INTERNAL_ROLES = frozenset({
-    "offline_access",
-    "uma_authorization",
-    f"default-roles-{KC_REALM}",
-})
 
 
 def _normalize_path(path: str, query: str = "") -> str:
@@ -668,34 +692,38 @@ async def _redis_setex_with_retries(key: str, ttl_seconds: int, value: str) -> N
     raise RuntimeError(f"redis setex failed for key {key}") from last_error
 
 
-async def get_jwks() -> dict:
+async def get_jwks(realm: str) -> dict:
     """Fetch and cache Keycloak JWKS in Redis + local memory cache."""
     global _jwks_cache, _jwks_fetched_at
 
     now = time.time()
-    if _jwks_cache and (now - _jwks_fetched_at) < JWKS_TTL:
-        return _jwks_cache
+    cached = _jwks_cache.get(realm)
+    fetched_at = _jwks_fetched_at.get(realm, 0.0)
+    if cached and (now - fetched_at) < JWKS_TTL:
+        return cached
 
     async with _jwks_lock:
-        # Double-check after acquiring the lock
         now = time.time()
-        if _jwks_cache and (now - _jwks_fetched_at) < JWKS_TTL:
-            return _jwks_cache
+        cached = _jwks_cache.get(realm)
+        fetched_at = _jwks_fetched_at.get(realm, 0.0)
+        if cached and (now - fetched_at) < JWKS_TTL:
+            return cached
 
-        cache_key = f"ztam:jwks:{KC_REALM}"
+        cache_key = f"ztam:jwks:{realm}"
         cached_value = await _redis_get_with_retries(cache_key)
         if cached_value:
-            _jwks_cache = json.loads(cached_value)
-            _jwks_fetched_at = time.time()
-            return _jwks_cache
+            _jwks_cache[realm] = json.loads(cached_value)
+            _jwks_fetched_at[realm] = time.time()
+            return _jwks_cache[realm]
 
-        _log_event(logging.INFO, "jwks_fetch_started", jwks_uri=JWKS_URI)
-        response = await _request_with_retries("GET", JWKS_URI, timeout=HTTP_TIMEOUT_SECONDS)
+        jwks_uri = _realm_jwks_uri(realm)
+        _log_event(logging.INFO, "jwks_fetch_started", jwks_uri=jwks_uri, realm=realm)
+        response = await _request_with_retries("GET", jwks_uri, timeout=HTTP_TIMEOUT_SECONDS)
         response.raise_for_status()
-        _jwks_cache = response.json()
-        _jwks_fetched_at = time.time()
-        await _redis_setex_with_retries(cache_key, JWKS_TTL, json.dumps(_jwks_cache))
-        return _jwks_cache
+        _jwks_cache[realm] = response.json()
+        _jwks_fetched_at[realm] = time.time()
+        await _redis_setex_with_retries(cache_key, JWKS_TTL, json.dumps(_jwks_cache[realm]))
+        return _jwks_cache[realm]
 
 
 def extract_roles(claims: dict) -> list[str]:
@@ -723,7 +751,9 @@ def extract_roles(claims: dict) -> list[str]:
         roles.extend(custom_role)
 
     # Deduplicate, remove empty strings, and strip Keycloak internal roles
-    return [r for r in dict.fromkeys(roles) if r and r not in _KC_INTERNAL_ROLES]
+    realm = str(claims.get("iss", "")).rstrip("/").split("/")[-1] or KC_REALM
+    internal_roles = _kc_internal_roles(realm)
+    return [r for r in dict.fromkeys(roles) if r and r not in internal_roles]
 
 
 # ─── Endpoints ───────────────────────────────────────────────────────────────
@@ -777,8 +807,8 @@ async def ztam_login_page(request: Request, next: str = "/") -> Response:
     tenant_config = get_tenant_config(host_header)
     
     tenant_name = (tenant_config or {}).get("name", "")
-    client_id = (tenant_config or {}).get("keycloak_client_id") or KC_CLIENT_ID
-    realm = (tenant_config or {}).get("keycloak_realm", KC_REALM)
+    client_id = _tenant_client_id(tenant_config)
+    realm = _tenant_realm(tenant_config)
     callback_url = build_callback_url(request, tenant_name)
     
     auth_uri = (
@@ -813,6 +843,10 @@ async def ztam_login_post(request: Request) -> Response:
     username: str = body.get("username", "").strip()
     password: str = body.get("password", "")
     next_url: str = _safe_next_url(body.get("next", "/"))
+    tenant_config = get_tenant_config(request.headers.get("host", ""))
+    realm = _tenant_realm(tenant_config)
+    client_id = _tenant_client_id(tenant_config)
+    client_secret = _tenant_client_secret(tenant_config)
 
     if not username or not password:
         return Response(content='{"error":"Username and password are required"}',
@@ -832,13 +866,13 @@ async def ztam_login_post(request: Request) -> Response:
     try:
         kc_resp = await _request_with_retries(
             "POST",
-            KC_TOKEN_URI,
+            _realm_token_uri(realm),
             request=request,
             timeout=HTTP_TIMEOUT_SECONDS,
             data={
                 "grant_type": "password",
-                "client_id": KC_CLIENT_ID,
-                "client_secret": KC_CLIENT_SECRET,
+                "client_id": client_id,
+                "client_secret": client_secret,
                 "username": username,
                 "password": password,
             },
@@ -920,6 +954,10 @@ async def login_proxy(request: Request):
 
     username: str = body.get("username", "").strip()
     password: str = body.get("password", "")
+    tenant_config = get_tenant_config(request.headers.get("host", ""))
+    realm = _tenant_realm(tenant_config)
+    client_id = _tenant_client_id(tenant_config)
+    client_secret = _tenant_client_secret(tenant_config)
 
     if not username or not password:
         return Response(
@@ -949,13 +987,13 @@ async def login_proxy(request: Request):
     try:
         kc_resp = await _request_with_retries(
             "POST",
-            KC_TOKEN_URI,
+            _realm_token_uri(realm),
             request=request,
             timeout=HTTP_TIMEOUT_SECONDS,
             data={
                 "grant_type": "password",
-                "client_id": KC_CLIENT_ID,
-                "client_secret": KC_CLIENT_SECRET,
+                "client_id": client_id,
+                "client_secret": client_secret,
                 "username": username,
                 "password": password,
             },
@@ -1041,8 +1079,9 @@ async def logout(request: Request) -> Response:
         token_jti = str(unverified.get("jti") or hashlib.sha256(token.encode("utf-8")).hexdigest())
         if ttl > 0:
             await _redis_setex_with_retries(f"ztam:blacklist:{token_jti}", ttl, "1")
-        realm = (tenant_config or {}).get("keycloak_realm", KC_REALM)
-        client_id = (tenant_config or {}).get("keycloak_client_id", KC_CLIENT_ID)
+        realm = _tenant_realm(tenant_config)
+        client_id = _tenant_client_id(tenant_config)
+        client_secret = _tenant_client_secret(tenant_config)
         await _request_with_retries(
             "POST",
             f"{KEYCLOAK_URL}/realms/{realm}/protocol/openid-connect/logout",
@@ -1050,7 +1089,7 @@ async def logout(request: Request) -> Response:
             timeout=HTTP_TIMEOUT_SECONDS,
             data={
                 "client_id": client_id,
-                "client_secret": KC_CLIENT_SECRET,
+                "client_secret": client_secret,
                 "token_type_hint": "access_token",
                 "token": token,
             },
@@ -1125,8 +1164,8 @@ async def login_redirect(request: Request, tenant: str, next: str = "/") -> Resp
     Called by Envoy when a user hits a 'keycloak' login-mode tenant without a token.
     """
     tenant_config = get_tenant_config(tenant_name=tenant) or {}
-    client_id = tenant_config.get("keycloak_client_id", tenant)
-    realm = tenant_config.get("keycloak_realm", KC_REALM)
+    client_id = _tenant_client_id(tenant_config) if tenant_config else tenant
+    realm = _tenant_realm(tenant_config)
     callback_url = build_callback_url(request, tenant)
     scoped_auth_uri = (
         f"{KC_ISSUER_URL}/realms/{realm}/protocol/openid-connect/auth?"
@@ -1152,10 +1191,10 @@ async def auth_callback(request: Request, code: str, state: str = "/", tenant: s
     sets a secure cookie, and redirects back to the original app page.
     """
     tenant_config = get_tenant_config(request.headers.get("host", ""), tenant) or {}
-    client_id = tenant_config.get("keycloak_client_id") or tenant or KC_CLIENT_ID
-    client_secret = tenant_config.get("keycloak_client_secret") or KC_CLIENT_SECRET
-    realm = tenant_config.get("keycloak_realm", KC_REALM)
-    token_uri = f"{KEYCLOAK_URL}/realms/{realm}/protocol/openid-connect/token"
+    client_id = _tenant_client_id(tenant_config) if tenant_config else (tenant or KC_CLIENT_ID)
+    client_secret = _tenant_client_secret(tenant_config)
+    realm = _tenant_realm(tenant_config)
+    token_uri = _realm_token_uri(realm)
     callback_url = build_callback_url(request, tenant_config.get("name", tenant))
 
     try:
@@ -1264,6 +1303,8 @@ async def check(request: Request, full_path: str = ""):
     host_header: str = request.headers.get("host", "")
     host_clean: str = host_header.split(":")[0]
     tenant_config = get_tenant_config(host_header)
+    tenant_realm = _tenant_realm(tenant_config)
+    tenant_client_id = _tenant_client_id(tenant_config)
 
     if not token:
         # Browser clients get redirected to the ZTAM login page.
@@ -1289,7 +1330,7 @@ async def check(request: Request, full_path: str = ""):
 
     # ---------- 2 & 3. Fetch JWKS (cached, lock-protected) ------------------
     try:
-        jwks = await get_jwks()
+        jwks = await get_jwks(tenant_realm)
     except Exception as exc:
         _metric_inc("ztam_auth_failures_total", type="jwks_fetch_failed")
         _log_event(logging.ERROR, "jwks_fetch_failed", request=request, error=str(exc), path=original_path)
@@ -1308,7 +1349,7 @@ async def check(request: Request, full_path: str = ""):
             jwks,
             algorithms=["RS256"],
             options={"verify_aud": False},
-            issuer=EXPECTED_ISSUER,
+            issuer=_realm_expected_issuer(tenant_realm),
         )
     except JWTError as exc:
         _metric_inc("ztam_auth_failures_total", type="jwt_validation_failed")
@@ -1338,16 +1379,21 @@ async def check(request: Request, full_path: str = ""):
             media_type="application/json",
         )
 
-    # Verify the token was issued for a client in our realm.
-    # We accept any non-empty azp — the JWKS signature + issuer check already
-    # guarantees the token came from our Keycloak. Strict azp == KC_CLIENT_ID
-    # would break multi-tenant flows where each tenant has its own client_id.
     azp = claims.get("azp", "")
     if not azp:
         _metric_inc("ztam_auth_failures_total", type="jwt_missing_azp")
         _log_event(logging.WARNING, "jwt_rejected_missing_azp", request=request, path=original_path)
         return Response(
             content='{"error":"invalid token: no authorized party"}',
+            status_code=403,
+            media_type="application/json",
+        )
+    if tenant_config and azp != tenant_client_id:
+        _metric_inc("ztam_auth_failures_total", type="jwt_client_mismatch", tenant_id=(tenant_config or {}).get("name", "unknown"))
+        _log_event(logging.WARNING, "jwt_client_mismatch", request=request, tenant_id=(tenant_config or {}).get("name", ""), azp=azp, expected_client_id=tenant_client_id)
+        _audit_event("deny", request, tenant_id=str((tenant_config or {}).get("name", "")), reason="jwt_client_mismatch")
+        return Response(
+            content='{"error":"invalid token: client mismatch"}',
             status_code=403,
             media_type="application/json",
         )
@@ -1366,7 +1412,7 @@ async def check(request: Request, full_path: str = ""):
     )
     tenant_id: str = _sanitize_tenant_id(
         tenant_from_host or str(claims.get("tenant_id") or claims.get("azp") or ""),
-        KC_REALM,
+        (tenant_config or {}).get("name", tenant_realm),
     )
     roles: list[str] = _sanitize_roles(extract_roles(claims))
 
@@ -1449,7 +1495,8 @@ async def check(request: Request, full_path: str = ""):
 
         extra_headers: dict = {}
         adapter_mode = str((tenant_config or {}).get("adapter_mode", "headers")).strip() or "headers"
-        if adapter_mode == "translated_token" and TESTAPP_JWT_SECRET:
+        downstream_jwt_secret = _tenant_downstream_jwt_secret(tenant_config)
+        if adapter_mode == "translated_token" and downstream_jwt_secret:
             now_ts = int(time.time())
             db_user_id = claims.get("db_user_id")
             try:
@@ -1469,7 +1516,7 @@ async def check(request: Request, full_path: str = ""):
                     "iat":      now_ts,
                     "exp":      now_ts + 3600,
                 },
-                TESTAPP_JWT_SECRET,
+                downstream_jwt_secret,
                 algorithm="HS256",
             )
             extra_headers["authorization"] = f"Bearer {downstream_token}"
@@ -1492,7 +1539,7 @@ async def check(request: Request, full_path: str = ""):
         if custom_role:
             clean_roles = _sanitize_roles([primary_role])
         else:
-            clean_roles = _sanitize_roles([r for r in roles if r not in _KC_INTERNAL_ROLES])
+            clean_roles = _sanitize_roles([r for r in roles if r not in _kc_internal_roles(tenant_realm)])
         if not clean_roles:
             clean_roles = ["viewer"]
         return Response(

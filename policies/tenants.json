@@ -1,4 +1,28 @@
 {
+  "taskpro": {
+    "roles": {
+      "user": {
+        "allowed_paths": [
+          "/api/"
+        ],
+        "allowed_exact_paths": [
+          "/",
+          "/dashboard.html",
+          "/favicon.ico"
+        ],
+        "denied_paths": [
+          "/admin/",
+          "/admin"
+        ],
+        "denied_exact_paths": [],
+        "allowed_methods": [
+          "GET",
+          "POST",
+          "DELETE"
+        ]
+      }
+    }
+  },
   "testapp": {
     "roles": {
       "editor": {
@@ -14,6 +38,7 @@
           "/admin/",
           "/admin"
         ],
+        "denied_exact_paths": [],
         "allowed_methods": [
           "GET",
           "POST",
@@ -35,6 +60,7 @@
           "/admin/",
           "/admin"
         ],
+        "denied_exact_paths": [],
         "allowed_methods": [
           "GET",
           "POST",
@@ -54,6 +80,7 @@
           "/admin/",
           "/admin"
         ],
+        "denied_exact_paths": [],
         "allowed_methods": [
           "GET"
         ]

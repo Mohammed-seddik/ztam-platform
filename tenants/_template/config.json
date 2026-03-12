@@ -5,13 +5,36 @@
   "hostname": "myapp.yourdomain.com",
   "keycloak_client_id": "REPLACE_ME",
   "keycloak_realm": "REPLACE_ME",
+  "keycloak_client_secret": "REPLACE_ME",
   "roles": [
     "admin",
     "user",
     "viewer"
   ],
   "login_mode": "keycloak",
+  "adapter_mode": "headers",
+  "downstream_jwt_secret": "",
+  "redirect_uris": [
+    "https://myapp.yourdomain.com/*",
+    "https://myapp.yourdomain.com/ztam/auth/callback*"
+  ],
+  "web_origins": [
+    "https://myapp.yourdomain.com"
+  ],
   "no_spi": false,
+  "db_credentials": {
+    "db_type": "mysql",
+    "db_host": "db",
+    "db_port": "3306",
+    "db_name": "appdb",
+    "db_user": "readonly_user",
+    "db_password": "REPLACE_ME",
+    "table_name": "users",
+    "username_col": "username",
+    "password_col": "password_hash",
+    "role_col": "role",
+    "hash_algorithm": "bcrypt"
+  },
   "permissions": {
     "user": {
       "allowed_paths": [

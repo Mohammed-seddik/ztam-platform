@@ -49,6 +49,7 @@ MYSQL_USER       = os.environ.get("MYSQL_USER",      "")
 MYSQL_PASS       = os.environ.get("MYSQL_PASSWORD",  "")
 DEMO_ALICE_PASSWORD = os.environ.get("DEMO_ALICE_PASSWORD", "")
 DEMO_CHARLIE_PASSWORD = os.environ.get("DEMO_CHARLIE_PASSWORD", "")
+TENANT_CONFIG_PATH = Path(__file__).resolve().parents[1] / "tenants" / "testapp" / "config.json"
 
 for _var, _val in (
     ("KC_ADMIN_PASS",    KC_ADMIN_PASS),
@@ -131,6 +132,7 @@ code, _ = kc("POST", "/admin/realms", {
     "registrationAllowed": False,
     "loginTheme": "keycloak",
     "accessTokenLifespan": 900,
+    "ssoSessionIdleTimeout": 1800,
     "ssoSessionMaxLifespan": 36000,
 }, token=ADMIN)
 if code == 201:
@@ -152,6 +154,29 @@ def update_realm_settings(changes: dict):
     if code not in (200, 204):
         print(f"   ERROR: could not update realm settings (HTTP {code})")
         sys.exit(1)
+
+
+def write_demo_tenant_config() -> None:
+    if not TENANT_CONFIG_PATH.exists():
+        return
+    raw = json.loads(TENANT_CONFIG_PATH.read_text(encoding="utf-8"))
+    raw["keycloak_realm"] = REALM
+    raw["keycloak_client_id"] = KC_CLIENT_ID
+    raw["keycloak_client_secret"] = KC_CLIENT_SECRET
+    raw["db_credentials"] = {
+        "db_type": "mysql",
+        "db_host": MYSQL_HOST,
+        "db_port": str(MYSQL_PORT),
+        "db_name": MYSQL_DB,
+        "db_user": MYSQL_USER,
+        "db_password": MYSQL_PASS,
+        "table_name": "users",
+        "username_col": "username",
+        "password_col": "password_hash",
+        "role_col": "role",
+        "hash_algorithm": "bcrypt",
+    }
+    TENANT_CONFIG_PATH.write_text(json.dumps(raw, indent=2) + "\n", encoding="utf-8")
 
 
 def enable_required_totp():
@@ -269,6 +294,7 @@ code, _ = kc("PUT",
 # 204 = updated, 200 = already correct
 if code in (200, 204):
     print("   ✓ Client secret synchronized")
+    write_demo_tenant_config()
 
 
 # ── 4. Register MySQL User-Federation SPI ─────────────────────────────────────
