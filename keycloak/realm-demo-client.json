@@ -1,0 +1,47 @@
+{
+  "realm": "demo-client",
+  "enabled": true,
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "resetPasswordAllowed": false,
+  "roles": {
+    "realm": [
+      {"name": "admin"},
+      {"name": "user"},
+      {"name": "viewer"},
+      {"name": "editor"}
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "client-demo-app",
+      "name": "Client Demo App",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "client-demo-secret",
+      "redirectUris": ["https://localhost/*"],
+      "webOrigins": ["https://localhost"],
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "fullScopeAllowed": true,
+      "protocolMappers": [
+        {
+          "name": "db_user_id",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "consentRequired": false,
+          "config": {
+            "userinfo.token.claim": "true",
+            "user.attribute": "db_user_id",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "claim.name": "db_user_id",
+            "jsonType.label": "String"
+          }
+        }
+      ]
+    }
+  ]
+}

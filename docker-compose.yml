@@ -1,268 +1,100 @@
 services:
-
-  redis:
-    image: redis:7.2-alpine
-    command: ["redis-server", "--save", "", "--appendonly", "no"]
-    networks: [ztam]
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 15
-
   postgres:
     image: postgres:16
     environment:
       POSTGRES_DB: keycloak
       POSTGRES_USER: keycloak
-      POSTGRES_PASSWORD: ${PG_PASS}
+      POSTGRES_PASSWORD: keycloak
     volumes:
-      - pg-data:/var/lib/postgresql/data
-    networks: [ztam]
-    restart: unless-stopped
+      - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U keycloak"]
+      test: ["CMD-SHELL", "pg_isready -U keycloak -d keycloak"]
       interval: 5s
       timeout: 5s
-      retries: 10
+      retries: 20
+
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_DATABASE: client_app
+      MYSQL_USER: appuser
+      MYSQL_PASSWORD: apppass
+      MYSQL_ROOT_PASSWORD: rootpass
+    command: ["--default-authentication-plugin=mysql_native_password"]
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./mysql/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uappuser", "-papppass"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  client-app:
+    build: ./client-app
+    environment:
+      PORT: 3000
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_DB: client_app
+      MYSQL_USER: appuser
+      MYSQL_PASSWORD: apppass
+      VERIFY_API_KEY: demo-shared-api-key
+      OIDC_ISSUER: http://keycloak:8080/realms/demo-client
+      OIDC_PUBLIC_ISSUER: http://localhost:8080/realms/demo-client
+      OIDC_CLIENT_ID: client-demo-app
+      OIDC_CLIENT_SECRET: client-demo-secret
+      OIDC_REDIRECT_URI: https://localhost/oidc/callback
+      SESSION_SECRET: change-me-in-real-use
+    depends_on:
+      mysql:
+        condition: service_healthy
+      keycloak:
+        condition: service_started
 
   keycloak:
-    image: quay.io/keycloak/keycloak:26.5.5
-    command: >
-      start
-      --db=postgres
-      --db-url=jdbc:postgresql://postgres:5432/keycloak
-      --db-username=keycloak
-      --db-password=${PG_PASS}
-      --hostname=${KC_HOSTNAME:-localhost}
-      --hostname-strict=false
-      --http-enabled=true
-    volumes:
-      - ./keycloak-db-spi/target/keycloak-db-spi.jar:/opt/keycloak/providers/keycloak-db-spi.jar
+    build: ./keycloak-spi
     environment:
-      KEYCLOAK_ADMIN: ${KC_ADMIN_USER:-admin}
-      KEYCLOAK_ADMIN_PASSWORD: ${KC_ADMIN_PASS}
-      KC_HOSTNAME: ${KC_HOSTNAME:-localhost}
-    # Admin console — bound to localhost only. Use SSH tunnel or firewall for remote access.
+      KC_DB: postgres
+      KC_DB_URL_HOST: postgres
+      KC_DB_URL_DATABASE: keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: keycloak
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+      KC_HTTP_ENABLED: "true"
+      KC_HEALTH_ENABLED: "true"
+      KC_METRICS_ENABLED: "true"
+    command:
+      - start-dev
+      - --http-port=8080
+      - --import-realm
+    volumes:
+      - ./keycloak/realm-demo-client.json:/opt/keycloak/data/import/realm-demo-client.json:ro
+      - ./keycloak/setup-realm.sh:/opt/keycloak/keycloak/setup-realm.sh:ro
     ports:
       - "127.0.0.1:8080:8080"
-    networks: [ztam]
-    restart: unless-stopped
     depends_on:
       postgres:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/8080' 2>/dev/null"]
-      interval: 10s
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/health/ready"]
+      interval: 5s
       timeout: 5s
-      retries: 20
-      start_period: 60s
-
-  opa:
-    image: openpolicyagent/opa:0.64.1
-    command: run --server --addr 0.0.0.0:8181 --watch /policies --ignore '*_test.rego'
-    volumes:
-      - ./policies:/policies:ro
-    # No external port: OPA is reachable only from auth-middleware on the internal network.
-    # Exposing OPA externally would allow anyone to query the policy engine.
-    networks: [ztam]
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "/opa", "eval", "--fail-defined", "data.authz"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  auth-middleware:
-    build: ./services/auth-middleware
-    volumes:
-      - ./tenants:/app/tenants:ro
-      - ./platform/published:/app/platform/published:ro
-    environment:
-      KEYCLOAK_URL: http://keycloak:8080
-      # KC_ISSUER_URL: the public-facing URL Keycloak stamps in JWT iss claims.
-      # Must match KC_HOSTNAME in the keycloak service (defaults to localhost).
-      KC_ISSUER_URL: ${KC_ISSUER_URL:-http://localhost:8080}
-      KC_REALM: ${KC_REALM}
-      KC_CLIENT_ID: ${KC_CLIENT_ID:-test-app}
-      KC_CLIENT_SECRET: ${KC_CLIENT_SECRET}
-      OPA_URL: http://opa:8181
-      TESTAPP_JWT_SECRET: ${TESTAPP_JWT_SECRET}
-      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
-      ENVOY_AUTH_SHARED_SECRET: ${ENVOY_AUTH_SHARED_SECRET}
-      HTTP_TIMEOUT_SECONDS: ${HTTP_TIMEOUT_SECONDS:-5}
-      OPA_TIMEOUT_SECONDS: ${OPA_TIMEOUT_SECONDS:-2}
-      HTTP_RETRY_ATTEMPTS: ${HTTP_RETRY_ATTEMPTS:-4}
-      REDIS_RETRY_ATTEMPTS: ${REDIS_RETRY_ATTEMPTS:-4}
-      JWKS_TTL_SECONDS: ${JWKS_TTL_SECONDS:-300}
-      TENANTS_DIR: /app/tenants
-      AUTH_METADATA_FILE: /app/platform/published/auth/tenants.json
-    # No external port: only Envoy calls auth-middleware via ext_authz on the internal network.
-    # Exposing this port would allow bypassing the policy engine entirely.
-    networks: [ztam]
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8001/health || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 15s
-    depends_on:
-      keycloak:
-        condition: service_healthy
-      opa:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-
-  control-plane:
-    build:
-      context: .
-      dockerfile: platform/control-plane/Dockerfile
-    environment:
-      CONTROL_PLANE_DB_PATH: /data/control-plane.db
-      TENANTS_DIR: /app/tenants
-      PUBLISHED_DIR: /app/platform/published
-      POLICIES_FILE: /app/policies/tenants.json
-      ENVOY_YAML: /app/envoy/envoy.yaml
-    volumes:
-      - ./tenants:/app/tenants:ro
-      - ./platform/published:/app/platform/published
-      - ./policies:/app/policies
-      - ./envoy:/app/envoy
-      - control-plane-data:/data
-    ports:
-      - "127.0.0.1:8010:8010"
-    networks: [ztam]
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8010/health || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+      retries: 30
 
   envoy:
-    image: envoyproxy/envoy:v1.28.7
+    image: envoyproxy/envoy:v1.30-latest
+    depends_on:
+      client-app:
+        condition: service_started
+    ports:
+      - "80:80"
+      - "443:443"
     volumes:
       - ./envoy/envoy.yaml:/etc/envoy/envoy.yaml:ro
-      - ./envoy/certs:/etc/envoy/certs:ro
-    ports:
-      - "80:8080"       # HTTP  → redirects to HTTPS
-      - "443:8443"      # HTTPS → all traffic, TLS terminated here
-    environment:
-      ENVOY_AUTH_SHARED_SECRET: ${ENVOY_AUTH_SHARED_SECRET}
-    networks: [ztam]
-    restart: unless-stopped
-    depends_on:
-      auth-middleware:
-        condition: service_healthy
-      testapp:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/9901' 2>/dev/null"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 15s
-
-  testapp-db:
-    image: mysql:8
-    environment:
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
-      MYSQL_DATABASE: ${MYSQL_DATABASE}
-      MYSQL_USER: ${MYSQL_USER}
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
-    volumes:
-      - ./demo/testapp/schema.sql:/docker-entrypoint-initdb.d/schema.sql
-      - testapp-db-data:/var/lib/mysql
-    networks: [ztam]
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "${MYSQL_USER}", "--password=${MYSQL_PASSWORD}"]
-      interval: 10s
-      timeout: 5s
-      retries: 15
-
-  testapp:
-    build: ./demo/testapp
-    # No external port: all traffic must go through Envoy (which enforces ZTAM auth).
-    # Exposing port 3001 would allow unauthenticated direct access to the API.
-    environment:
-      DB_HOST: testapp-db
-      DB_PORT: 3306
-      DB_USER: ${MYSQL_USER}
-      DB_PASSWORD: ${MYSQL_PASSWORD}
-      DB_NAME: ${MYSQL_DATABASE}
-      JWT_SECRET: ${TESTAPP_JWT_SECRET}
-      JWT_EXPIRES_IN: 8h
-      PORT: 3000
-    networks: [ztam]
-    restart: unless-stopped
-    depends_on:
-      testapp-db:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD-SHELL", "wget -qO /dev/null http://localhost:3000/ 2>&1 || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-
-  prometheus:
-    image: prom/prometheus:v2.54.1
-    command:
-      - --config.file=/etc/prometheus/prometheus.yml
-      - --storage.tsdb.path=/prometheus
-    volumes:
-      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - prometheus-data:/prometheus
-    ports:
-      - "127.0.0.1:9090:9090"
-    networks: [ztam]
-    restart: unless-stopped
-    profiles: [observability]
-    depends_on:
-      auth-middleware:
-        condition: service_healthy
-      envoy:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD-SHELL", "wget -qO /dev/null http://localhost:9090/-/healthy || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-
-  grafana:
-    image: grafana/grafana:11.1.4
-    environment:
-      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-change_me_grafana}
-      GF_USERS_ALLOW_SIGN_UP: "false"
-    ports:
-      - "127.0.0.1:3001:3000"
-    volumes:
-      - grafana-data:/var/lib/grafana
-      - ./monitoring/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
-      - ./monitoring/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
-    networks: [ztam]
-    restart: unless-stopped
-    profiles: [observability]
-    depends_on:
-      prometheus:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD-SHELL", "wget -qO /dev/null http://localhost:3000/api/health || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-
-networks:
-  ztam:
-    driver: bridge
+      - ./certs:/etc/envoy/certs:ro
 
 volumes:
-  pg-data:
-  testapp-db-data:
-  prometheus-data:
-  grafana-data:
-  control-plane-data:
+  postgres_data:
+  mysql_data:

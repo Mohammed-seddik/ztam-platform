@@ -1,0 +1,13 @@
+<!doctype html>
+<html>
+  <body>
+    <h1>Protected Home</h1>
+    <p>Welcome {{ user.name }} ({{ user.preferred_username }})</p>
+    <ul>
+      <li>Email: {{ user.email }}</li>
+      <li>db_user_id: {{ user.db_user_id }}</li>
+      <li>roles: {{ user.roles }}</li>
+    </ul>
+    <a href="/logout">Logout</a>
+  </body>
+</html>
