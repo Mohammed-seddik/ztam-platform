@@ -1,0 +1,85 @@
+{
+  "name": "testapp2",
+  "display_name": "TestApp2 (Task Manager)",
+  "backend_url": "http://testapp2:3001",
+  "backend_host": "testapp2",
+  "backend_port": 3001,
+  "backend_tls": false,
+  "hostname": "testapp2.localhost",
+  "keycloak_client_id": "testapp2",
+  "keycloak_realm": "testapp2",
+  "keycloak_client_secret": "ztam-testapp2-8dca69cec4e91bfa4f14a5c6",
+  "roles": [
+    "admin",
+    "user"
+  ],
+  "login_mode": "keycloak",
+  "adapter_mode": "translated_token",
+  "downstream_jwt_secret": "ztam-testapp2-jwt-secret-2026-dev",
+  "redirect_uris": [
+    "https://testapp2.localhost/*",
+    "https://testapp2.localhost/ztam/auth/callback*"
+  ],
+  "web_origins": [
+    "https://testapp2.localhost"
+  ],
+  "no_spi": true,
+  "db_credentials": {
+    "db_type": "mysql",
+    "db_host": "testapp2-db",
+    "db_port": "3306",
+    "db_name": "testapp2db",
+    "db_user": "testapp2_user",
+    "db_password": "testapp2pass",
+    "table_name": "Users",
+    "username_col": "username",
+    "password_col": "password",
+    "role_col": "role",
+    "hash_algorithm": "bcrypt"
+  },
+  "permissions": {
+    "admin": {
+      "allowed_paths": [
+        "/api/",
+        "/admin/"
+      ],
+      "allowed_exact_paths": [
+        "/",
+        "/index.html",
+        "/app.js",
+        "/style.css"
+      ],
+      "denied_paths": [],
+      "denied_exact_paths": [],
+      "allowed_methods": [
+        "GET",
+        "POST",
+        "PUT",
+        "PATCH",
+        "DELETE"
+      ]
+    },
+    "user": {
+      "allowed_paths": [
+        "/api/"
+      ],
+      "allowed_exact_paths": [
+        "/",
+        "/index.html",
+        "/app.js",
+        "/style.css"
+      ],
+      "denied_paths": [
+        "/admin/"
+      ],
+      "denied_exact_paths": [],
+      "allowed_methods": [
+        "GET",
+        "POST",
+        "DELETE"
+      ]
+    }
+  },
+  "created_at": "2026-03-12T00:00:00Z",
+  "notes": "testApp2 - no_spi mode, Keycloak manages users directly"
+}

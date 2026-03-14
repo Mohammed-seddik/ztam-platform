@@ -122,6 +122,14 @@ if "access_token" not in d:
 ADMIN = d["access_token"]
 print("   ✓ Admin authenticated")
 
+# Get Realm UUID
+code, realm_data = kc("GET", f"/admin/realms/{REALM}", token=ADMIN)
+if code != 200:
+    print(f"   ERROR: could not get realm UUID (HTTP {code})")
+    sys.exit(1)
+REALM_UUID = realm_data["id"]
+print(f"   ✓ Realm UUID: {REALM_UUID}")
+
 
 # ── 2. Create realm ────────────────────────────────────────────────────────────
 step(2, f"Ensuring realm '{REALM}' exists...")
@@ -210,6 +218,7 @@ def user_storage_component_id():
     code, components = kc("GET",
         f"/admin/realms/{REALM}/components?type=org.keycloak.storage.UserStorageProvider",
         token=ADMIN)
+    print(f"   DEBUG: user_storage_components code={code} data={components}")
     if code != 200 or not isinstance(components, list):
         print(f"   ERROR: could not load user storage components (HTTP {code})")
         sys.exit(1)
@@ -315,7 +324,7 @@ else:
             "name":        "testapp-db",
             "providerId":  "mysql-db-provider",
             "providerType": "org.keycloak.storage.UserStorageProvider",
-            "parentId":    REALM,
+            "parentId":    REALM_UUID,
             "config": {
                 "db_host":      [MYSQL_HOST],
                 "db_port":      [MYSQL_PORT],
@@ -337,6 +346,7 @@ else:
         print("   Make sure the SPI JAR is built: cd keycloak-db-spi && mvn clean package")
         sys.exit(1)
 
+time.sleep(2)
 SPI_COMPONENT_ID = user_storage_component_id()
 
 

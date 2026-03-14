@@ -531,7 +531,8 @@ def _tenant_client_secret(tenant_config: Optional[dict]) -> str:
 
 
 def _tenant_downstream_jwt_secret(tenant_config: Optional[dict]) -> str:
-    return str((tenant_config or {}).get("downstream_jwt_secret", TESTAPP_JWT_SECRET or "")).strip()
+    secret = (tenant_config or {}).get("downstream_jwt_secret")
+    return str(secret or TESTAPP_JWT_SECRET or "").strip()
 
 
 def _realm_token_uri(realm: str) -> str:

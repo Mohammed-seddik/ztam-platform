@@ -320,6 +320,92 @@ static_resources:
                             cluster: testapp_cluster
                             host_rewrite_literal: "testapp"
                             timeout: 30s
+                    # ── Tenant: testapp2 (keycloak mode) ────────────────────
+                    - name: testapp2_vhost
+                      domains: ["testapp2.localhost"]
+                      response_headers_to_add:
+                        - header:
+                            key: Strict-Transport-Security
+                            value: "max-age=63072000; includeSubDomains; preload"
+                        - header:
+                            key: X-Content-Type-Options
+                            value: "nosniff"
+                        - header:
+                            key: X-Frame-Options
+                            value: "SAMEORIGIN"
+                        - header:
+                            key: Referrer-Policy
+                            value: "strict-origin-when-cross-origin"
+                        - header:
+                            key: Content-Security-Policy
+                            value: "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'"
+                        - header:
+                            key: Permissions-Policy
+                            value: "geolocation=(), microphone=(), camera=(), payment=()"
+                        - header:
+                            key: Cache-Control
+                            value: "no-store"
+                      routes:
+                        - match:
+                            prefix: "/ztam/"
+                          route:
+                            cluster: auth_middleware_cluster
+                            timeout: 10s
+                          request_headers_to_add:
+                            - append_action: OVERWRITE_IF_EXISTS_OR_ADD
+                              header:
+                                key: x-ztam-internal-auth
+                                value: "%ENVIRONMENT(ENVOY_AUTH_SHARED_SECRET)%"
+                          typed_per_filter_config:
+                            envoy.filters.http.ext_authz:
+                              "@type": type.googleapis.com/envoy.extensions.filters.http.ext_authz.v3.ExtAuthzPerRoute
+                              disabled: true
+                        - match:
+                            path: "/api/auth/login"
+                          route:
+                            cluster: auth_middleware_cluster
+                            prefix_rewrite: "/login-proxy"
+                            timeout: 10s
+                          request_headers_to_add:
+                            - append_action: OVERWRITE_IF_EXISTS_OR_ADD
+                              header:
+                                key: x-ztam-internal-auth
+                                value: "%ENVIRONMENT(ENVOY_AUTH_SHARED_SECRET)%"
+                          typed_per_filter_config:
+                            envoy.filters.http.ext_authz:
+                              "@type": type.googleapis.com/envoy.extensions.filters.http.ext_authz.v3.ExtAuthzPerRoute
+                              disabled: true
+                        - match:
+                            path: "/api/auth/logout"
+                          route:
+                            cluster: auth_middleware_cluster
+                            prefix_rewrite: "/logout"
+                            timeout: 10s
+                          request_headers_to_add:
+                            - append_action: OVERWRITE_IF_EXISTS_OR_ADD
+                              header:
+                                key: x-ztam-internal-auth
+                                value: "%ENVIRONMENT(ENVOY_AUTH_SHARED_SECRET)%"
+                          typed_per_filter_config:
+                            envoy.filters.http.ext_authz:
+                              "@type": type.googleapis.com/envoy.extensions.filters.http.ext_authz.v3.ExtAuthzPerRoute
+                              disabled: true
+                        - match:
+                            prefix: "/static/"
+                          route:
+                            cluster: testapp2_cluster
+                            host_rewrite_literal: "testapp2"
+                            timeout: 10s
+                          typed_per_filter_config:
+                            envoy.filters.http.ext_authz:
+                              "@type": type.googleapis.com/envoy.extensions.filters.http.ext_authz.v3.ExtAuthzPerRoute
+                              disabled: true
+                        - match:
+                            prefix: "/"
+                          route:
+                            cluster: testapp2_cluster
+                            host_rewrite_literal: "testapp2"
+                            timeout: 30s
 # __ZTAM_TENANT_ROUTES_END__ (generated by tenant_manager.py)
                     - name: backend
                       domains: ["*"]
@@ -499,6 +585,20 @@ static_resources:
                     socket_address:
                       address: testapp
                       port_value: 3000
+    # ── Tenant: testapp2 ─────────────────────────────────────────────────────
+    - name: testapp2_cluster
+      connect_timeout: 10s
+      type: LOGICAL_DNS
+      dns_lookup_family: V4_ONLY
+      load_assignment:
+        cluster_name: testapp2_cluster
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: testapp2
+                      port_value: 3001
 # __ZTAM_TENANT_CLUSTERS_END__ (generated by tenant_manager.py)
 
 admin:

@@ -1,6 +1,6 @@
 {
   "version": "v1",
-  "generated_at": "2026-03-09T17:12:00Z",
+  "generated_at": "2026-03-14T00:43:54Z",
   "tenants": [
     {
       "tenant_id": "taskpro",
@@ -22,6 +22,17 @@
       "adapter_mode": "translated_token",
       "keycloak_realm": "test-tenant",
       "keycloak_client_id": "test-app",
+      "status": "published"
+    },
+    {
+      "tenant_id": "testapp2",
+      "display_name": "TestApp2 (Task Manager)",
+      "primary_hostname": "testapp2.localhost",
+      "integration_mode": "managed_oidc",
+      "identity_mode": "managed",
+      "adapter_mode": "translated_token",
+      "keycloak_realm": "testapp2",
+      "keycloak_client_id": "testapp2",
       "status": "published"
     }
   ]

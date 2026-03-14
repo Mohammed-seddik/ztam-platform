@@ -159,6 +159,8 @@ services:
         condition: service_healthy
       testapp:
         condition: service_healthy
+      testapp2:
+        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/9901' 2>/dev/null"]
       interval: 10s
@@ -204,6 +206,44 @@ services:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "wget -qO /dev/null http://localhost:3000/ 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  testapp2-db:
+    image: mysql:8
+    environment:
+      MYSQL_ROOT_PASSWORD: ${TESTAPP2_DB_ROOT_PASSWORD}
+      MYSQL_DATABASE: testapp2db
+      MYSQL_USER: testapp2_user
+      MYSQL_PASSWORD: ${TESTAPP2_DB_PASSWORD}
+    volumes:
+      - testapp2-db-data:/var/lib/mysql
+    networks: [ztam]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "testapp2_user", "--password=${TESTAPP2_DB_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+
+  testapp2:
+    build: "../testApp2"
+    environment:
+      DB_HOST: testapp2-db
+      DB_PORT: 3306
+      DB_USER: testapp2_user
+      DB_PASSWORD: ${TESTAPP2_DB_PASSWORD}
+      DB_NAME: testapp2db
+      APP_JWT_SECRET: ${TESTAPP2_JWT_SECRET}
+      PORT: 3001
+    networks: [ztam]
+    restart: unless-stopped
+    depends_on:
+      testapp2-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO /dev/null http://localhost:3001/ 2>&1 || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -263,6 +303,7 @@ networks:
 volumes:
   pg-data:
   testapp-db-data:
+  testapp2-db-data:
   prometheus-data:
   grafana-data:
   control-plane-data:

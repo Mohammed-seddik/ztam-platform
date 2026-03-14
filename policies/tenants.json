@@ -86,5 +86,50 @@
         ]
       }
     }
+  },
+  "testapp2": {
+    "roles": {
+      "admin": {
+        "allowed_paths": [
+          "/api/",
+          "/admin/"
+        ],
+        "allowed_exact_paths": [
+          "/",
+          "/index.html",
+          "/app.js",
+          "/style.css"
+        ],
+        "denied_paths": [],
+        "denied_exact_paths": [],
+        "allowed_methods": [
+          "GET",
+          "POST",
+          "PUT",
+          "PATCH",
+          "DELETE"
+        ]
+      },
+      "user": {
+        "allowed_paths": [
+          "/api/"
+        ],
+        "allowed_exact_paths": [
+          "/",
+          "/index.html",
+          "/app.js",
+          "/style.css"
+        ],
+        "denied_paths": [
+          "/admin/"
+        ],
+        "denied_exact_paths": [],
+        "allowed_methods": [
+          "GET",
+          "POST",
+          "DELETE"
+        ]
+      }
+    }
   }
 }
