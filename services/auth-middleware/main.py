@@ -65,8 +65,8 @@ class JsonFormatter(logging.Formatter):
             if key in _LOG_RESERVED_FIELDS or key.startswith("_"):
                 continue
             payload[key] = value
-        if record.exc_info:
-            payload["exception"] = self.formatException(record.exc_info)
+        if record.exc_info and all(v is not None for v in record.exc_info):
+            payload["exception"] = self.formatException(record.exc_info)  # type: ignore[arg-type]
         return json.dumps(payload, default=str)
 
 

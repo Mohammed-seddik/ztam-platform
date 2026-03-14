@@ -8,7 +8,7 @@ COPY frontend/ ./frontend/
 # Install backend dependencies
 COPY backend/package*.json ./backend/
 WORKDIR /app/backend
-RUN npm install --omit=dev
+RUN npm install
 
 # Copy remaining backend source
 COPY backend/ .

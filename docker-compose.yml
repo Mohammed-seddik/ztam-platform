@@ -79,6 +79,8 @@ services:
     volumes:
       - ./tenants:/app/tenants:ro
       - ./platform/published:/app/platform/published:ro
+      - ./services/auth-middleware:/app
+    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8001", "--reload"]
     environment:
       KEYCLOAK_URL: http://keycloak:8080
       # KC_ISSUER_URL: the public-facing URL Keycloak stamps in JWT iss claims.
@@ -199,6 +201,11 @@ services:
       JWT_SECRET: ${TESTAPP_JWT_SECRET}
       JWT_EXPIRES_IN: 8h
       PORT: 3000
+    volumes:
+      - ./demo/testapp/backend:/app/backend
+      - /app/backend/node_modules
+      - ./demo/testapp/frontend:/app/frontend
+    command: ["npm", "run", "dev"]
     networks: [ztam]
     restart: unless-stopped
     depends_on:
