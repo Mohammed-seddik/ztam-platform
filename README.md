@@ -43,6 +43,8 @@ This is intentionally simple and optimized for a same-day demo.
 ## What is included
 
 - **Envoy** on HTTPS `https://localhost` (with optional HTTP->HTTPS redirect).
+  See [docs/architecture/PROXY.md](docs/architecture/PROXY.md) for a detailed explanation
+  of how the proxy is configured and used.
 - **Keycloak 26.0.7** with Postgres.
 - **Custom Keycloak Authenticator SPI** that calls `POST /auth/verify`.
 - **Client app (Flask)** with protected home page and MySQL-backed users/roles.

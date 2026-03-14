@@ -35,6 +35,9 @@ Browser ─ HTTP  :80  ───►│  │  TLS termination  │◄────
 
 ### 1. Envoy Proxy (`envoy/envoy.yaml`)
 
+> For a full, annotated explanation of every Envoy configuration section see
+> [PROXY.md](PROXY.md).
+
 **Role:** Policy Enforcement Point (PEP). Every byte of traffic goes through Envoy.
 
 **Key responsibilities:**
